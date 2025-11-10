@@ -39,8 +39,16 @@ class CornerFinder:
     def __init__(self, image_folder):
         # Open folder containing images
         self.image_folder = image_folder
-        # Read document with photos stats in the folder
-        csv_path = f'{self.image_folder}/photos_data.csv'
+        # Read document with photos stats in the folder. Accept either
+        # 'photos_data.csv' (new) or fall back to 'photos.csv' (older name).
+        csv_path_a = os.path.join(self.image_folder, 'photos_data.csv')
+        csv_path_b = os.path.join(self.image_folder, 'photos.csv')
+        if os.path.exists(csv_path_a):
+            csv_path = csv_path_a
+        elif os.path.exists(csv_path_b):
+            csv_path = csv_path_b
+        else:
+            raise FileNotFoundError(f"Could not find photos CSV in '{self.image_folder}': looked for photos_data.csv and photos.csv")
         photos_df = pd.read_csv(csv_path)
 
         # Find marker type and size
@@ -226,6 +234,8 @@ class CornerFinder:
                 marker_type = row.get("marker_type", '')
                 intensity = row.get("intensity", '')
                 pose = row.get("pose", '')
+                #change ; to , inside pose
+                pose = pose.replace(';', ',')
                 rvec = ','.join(map(str, rvecs[i]))
                 tvec = ','.join(map(str, tvecs[i]))
 
@@ -253,9 +263,9 @@ class CornerFinder:
 # Main function to run the corner finder
 if __name__ == "__main__":
     # For each folder inside this folder
-    main_folder = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d100"  # Replace with your image folder path
-    # Get all subfolders
-    subfolders = [f.path for f in os.scandir(main_folder) if f.is_dir()]
+    main_folder = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50"  # Replace with your image folder path
+    # Get all subfolders, but skip the 'results' folder to avoid re-processing outputs
+    subfolders = [f.path for f in os.scandir(main_folder) if f.is_dir() and os.path.basename(f.path) != 'results']
     for image_folder in subfolders:
         print(f"Processing folder: {image_folder}")
         corner_finder = CornerFinder(image_folder)

@@ -38,7 +38,7 @@ class Estimator:
     def undistort_points(self, pts):
         """Undistort points using the Kannala-Brandt model."""
         pts = np.array(pts, dtype=np.float64).reshape(-1, 1, 2)
-        undistorted_pts = cv2.undistortPoints(pts, self.K, self.D, self.XI, P=self.K)
+        undistorted_pts = cv2.omnidir.undistortPoints(pts, self.K, self.D, self.XI, R=np.eye(3))
         return undistorted_pts.reshape(-1, 2)
     
     def get_poses(self, csv_file):
@@ -78,10 +78,26 @@ class Estimator:
                 p = p.strip()
                 if p == '':
                     continue
+                # Try int conversion first
                 try:
                     ids_parsed.append(int(p))
+                    continue
+                except ValueError:
+                    pass
+
+                # If the value is a float-like string e.g. '5.0', convert to float
+                # and then to int if it's integral. Otherwise keep as string.
+                try:
+                    f = float(p)
                 except Exception:
                     ids_parsed.append(p)
+                    continue
+
+                if abs(f - round(f)) < 1e-8:
+                    ids_parsed.append(int(round(f)))
+                else:
+                    ids_parsed.append(p)
+
             return ids_parsed
         # ----------------------------------------
 
@@ -90,6 +106,7 @@ class Estimator:
         corners = data['corners'].apply(parse_corners_field).tolist()
         ids = data['ids'].apply(parse_ids_field).tolist()
         marker_type = data['marker_type'].iloc[0]
+        print(f"Marker type: {marker_type}")
 
         # Undistort corners if needed
         for i in range(len(corners)):
@@ -98,7 +115,8 @@ class Estimator:
 
         # Define marker size (mm)
         marker_size_dict = {"1p": 8.2, "2e": 5.3, "3e": 4.35, "2v": 4.2, "3v": 4.2}
-        marker_size = marker_size_dict.get(marker_type, 4.0)
+        marker_size = marker_size_dict.get(marker_type)
+        print(f"Using marker size: {marker_size} mm")
 
         # Estimate pose for each image
         poses = []
@@ -125,7 +143,7 @@ class Estimator:
             [-marker_size/2, -marker_size/2, 0]
         ], dtype=np.float32)
         # Solve PnP using IPPE_SQUARE method
-        rvec, tvec, _ = cv2.solvePnPGeneric(
+        retval, rvecs, tvecs, _ = cv2.solvePnPGeneric(
             obj_points, 
             np.array(corners, dtype=np.float32).reshape(1, 4, 2), 
             np.eye(3, dtype=np.float32),
@@ -134,8 +152,8 @@ class Estimator:
         )
 
         # rvec/tvec transform SMF -> CF
-        R_cf_smf, _ = cv2.Rodrigues(rvec[0])
-        t_cf_smf = tvec[0].reshape(3, 1)
+        R_cf_smf, _ = cv2.Rodrigues(rvecs[0])
+        t_cf_smf = tvecs[0].reshape(3, 1)
 
         Tcf_smf = np.eye(4)
         Tcf_smf[:3, :3] = R_cf_smf
@@ -146,9 +164,22 @@ class Estimator:
             5: np.array([[1, 0, 0, 0],
                         [0, 1, 0, 0],
                         [0, 0, 1, 3.09],
+                        [0, 0, 0, 1]]), 
+
+            0: np.array([[1, 0, 0, 0],
+                        [0, np.cos(np.deg2rad(15)),-np.sin(np.deg2rad(15)), -5.416],
+                        [0, np.sin(np.deg2rad(15)), np.cos(np.deg2rad(15)), 4.407],
+                        [0, 0, 0, 1]]),
+
+            1: np.array([[1, 0, 0, 0],
+                        [0, np.cos(np.deg2rad(15)),-np.sin(np.deg2rad(15)), -5.416],
+                        [0, np.sin(np.deg2rad(15)), np.cos(np.deg2rad(15)), 4.407],
                         [0, 0, 0, 1]])
         }
         # Get Tmf_smf for this id
+        # Adjust id to int
+        id = int(id)
+
         Tmf_smf = Tmf_smf_dict[id]
         Tcf_mf = Tcf_smf @ np.linalg.inv(Tmf_smf)
         # Extract corrected rvec/tvec
