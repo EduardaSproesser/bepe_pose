@@ -4,8 +4,6 @@ import cv2
 import numpy as np
 import pandas as pd
 import os
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 
 class Estimator:
     def __init__(self, cam_params_file, dict_type=cv2.aruco.DICT_4X4_50):
@@ -123,15 +121,48 @@ class Estimator:
         for nv, c, i in zip(n_valid, corners, ids):
             if nv == 1:
                 rvec, tvec = self.estimate_pose_single(c[0], i[0], marker_size)
-                poses.append((rvec, tvec))
+                poses.append((rvec, tvec/0.69))
             elif nv > 1:
-                rvecs, tvecs = self.estimate_pose_multi(c, i, marker_size)
-                poses.append((rvecs, tvecs))
+                rvecs, tvecs = self.estimate_pose_multi(c, i, marker_type)
+                poses.append((rvecs, tvecs/0.69))
             else:
                 poses.append((None, None))
 
         return poses
 
+    def save_computed_poses(self, poses, output_csv):
+        """Append computed poses to a copy of the CSV file."""
+        # Load original CSV
+        data = pd.read_csv(output_csv, sep=';')
+
+        # Prepare new columns
+        rvecs_list = []
+        tvecs_list = []
+
+        for rvec, tvec in poses:
+            if rvec is None or tvec is None:
+                rvecs_list.append('')
+                tvecs_list.append('')
+            elif isinstance(rvec, list) or isinstance(rvec, np.ndarray) and rvec.ndim == 2:
+                # Multiple markers
+                rvecs_str = ','.join([','.join([f"{val:.6f}" for val in rv.flatten()]) for rv in rvec])
+                tvecs_str = ','.join([','.join([f"{val:.6f}" for val in tv.flatten()]) for tv in tvec])
+                rvecs_list.append(rvecs_str)
+                tvecs_list.append(tvecs_str)
+            else:
+                # Single marker
+                rvecs_list.append(','.join([f"{val:.6f}" for val in rvec.flatten()]))
+                tvecs_list.append(','.join([f"{val:.6f}" for val in tvec.flatten()]))
+
+        # Add new columns to DataFrame
+        data['rvec_est'] = rvecs_list
+        data['tvec_est'] = tvecs_list
+
+        # Save to new CSV
+        base, ext = os.path.splitext(output_csv)
+        new_csv_file = f"{base}_with_poses{ext}"
+        data.to_csv(new_csv_file, sep=';', index=False)
+        print(f"Saved computed poses to {new_csv_file}")
 
     def estimate_pose_single(self, corners, id, marker_size):
         """Estimate pose for a single marker detection."""
@@ -151,9 +182,18 @@ class Estimator:
             flags=cv2.SOLVEPNP_IPPE_SQUARE
         )
 
+        # Select solution pointing towards camera
+        best_idx, max_forward = 0, -np.inf
+        for i, rvec_cand in enumerate(rvecs):
+            R_cand, _ = cv2.Rodrigues(rvec_cand)
+            forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
+            if forward_score < max_forward:
+                max_forward = forward_score
+                best_idx = i
+
         # rvec/tvec transform SMF -> CF
-        R_cf_smf, _ = cv2.Rodrigues(rvecs[0])
-        t_cf_smf = tvecs[0].reshape(3, 1)
+        R_cf_smf, _ = cv2.Rodrigues(rvecs[best_idx])
+        t_cf_smf = tvecs[best_idx].reshape(3, 1)
 
         Tcf_smf = np.eye(4)
         Tcf_smf[:3, :3] = R_cf_smf
@@ -166,12 +206,12 @@ class Estimator:
                         [0, 0, 1, 3.09],
                         [0, 0, 0, 1]]), 
 
-            0: np.array([[1, 0, 0, 0],
-                        [0, np.cos(np.deg2rad(15)),-np.sin(np.deg2rad(15)), -5.416],
-                        [0, np.sin(np.deg2rad(15)), np.cos(np.deg2rad(15)), 4.407],
+            1: np.array([[1, 0, 0, 0],
+                        [0, np.cos(np.deg2rad(165)),-np.sin(np.deg2rad(165)), 5.416],
+                        [0, np.sin(np.deg2rad(165)), np.cos(np.deg2rad(165)), -4.407],
                         [0, 0, 0, 1]]),
 
-            1: np.array([[1, 0, 0, 0],
+            0: np.array([[1, 0, 0, 0],
                         [0, np.cos(np.deg2rad(15)),-np.sin(np.deg2rad(15)), -5.416],
                         [0, np.sin(np.deg2rad(15)), np.cos(np.deg2rad(15)), 4.407],
                         [0, 0, 0, 1]])
@@ -190,13 +230,130 @@ class Estimator:
         return corrected_rvec, corrected_tvec
 
 
-    def estimate_pose_multi(self, corners_list, ids_list, marker_size):
+    def estimate_pose_multi(self, corners_list, ids_list, marker_type):
+
+        match marker_type:
+            case "2e":
+                marker_points_dict = {
+                    1: np.array([  # primeiro marcador
+                        [-2.65, 7.976, 3.721],
+                        [2.65, 7.976, 3.721],
+                        [2.65, 2.857, 5.092],
+                        [-2.65, 2.857, 5.092]
+                    ], dtype=np.float32),
+
+                    0: np.array([  # segundo marcador
+                        [-2.65, -2.857, 5.092],
+                        [2.65, -2.857, 5.092],
+                        [2.65, -7.976, 3.721],
+                        [-2.65, -7.976, 3.721]
+                    ], dtype=np.float32)
+                }
+            
+            case "3e":
+                marker_points_dict = {
+                    2: np.array([
+                        [4.623, 2.165, 4.619],
+                        [8.806, 2.165, 3.498],
+                        [8.806, -2.165, 3.498],
+                        [4.623, -2.165, 4.619]
+                    ], dtype=np.float32),
+                    3: np.array([
+                        [-6.264, 6.54, 3.501],
+                        [-2.515, 8.705, 3.501],
+                        [-0.423, 5.083, 4.622],
+                        [-4.173, 2.918, 4.622]
+                    ], dtype=np.float32),
+                    4: np.array([
+                        [-4.187, -2.922, 4.619],
+                        [-0.437, -5.087, 4.619],
+                        [-2.528, -8.709, 3.498],
+                        [-6.278, -6.544, 3.498]
+                    ], dtype=np.float32)
+                }
+            
+            case "2v":
+                marker_points_dict = {
+                    6: np.array([
+                        [ -2.973, 5.935, 4.268],
+                        [ 0.00, 8.807, 3.498],
+                        [ 2.973, 5.935, 4.268],
+                        [ 0.00, 3.063, 5.037]
+                    ], dtype=np.float32),
+                    7: np.array([
+                        [-2.973, -5.935, 4.268],
+                        [0.00, -3.063, 5.037],
+                        [2.973, -5.935, 4.268],
+                        [0.00, -8.807, 3.498]
+                    ], dtype=np.float32)
+                }
+            
+            case "3v":
+                marker_points_dict = {
+                    9: np.array([
+                        [-4.403, 7.627, 3.498],
+                        [-0.392, 6.626, 4.268],
+                        [-1.531, 2.652, 5.037],
+                        [-5.542, 3.653, 4.268]
+                    ], dtype=np.float32),
+                    10: np.array([
+                        [ -5.539, -3.666, 4.265],
+                        [-1.528, -2.665, 5.035],
+                        [-0.389, -6.639, 4.265],
+                        [-4.40, -7.64, 3.496]
+                    ], dtype=np.float32),
+                    8: np.array([
+                        [3.063, 0.00, 5.037],
+                        [5.935, 2.973, 4.268],
+                        [8.807, 0.00, 3.498],
+                        [5.935, -2.973, 4.268]
+                    ], dtype=np.float32)
+                }
+
+            case _:
+                raise ValueError("Unknown marker type")
         """Estimate pose for multiple marker detections."""
+
+        all_obj_pts = []
+        all_img_pts = []
+        used_ids = [] 
+
+        for obj_corners, marker_id in zip(corners_list, ids_list):
+            marker_id = int(marker_id[0]) if isinstance(marker_id, np.ndarray) else int(marker_id)
+
+            if marker_id not in marker_points_dict:
+                continue
+
+            obj_pts = marker_points_dict[marker_id]  # (4,3)
+            corners_formatted = np.array(obj_corners, dtype=np.float32)
+
+            if corners_formatted.ndim == 3 and corners_formatted.shape[1] == 1:
+                pass  # já está em (N,1,2)
+            elif corners_formatted.ndim == 3 and corners_formatted.shape[0] == 1:
+                corners_formatted = corners_formatted.reshape(4, 1, 2)
+            elif corners_formatted.ndim == 2:
+                corners_formatted = corners_formatted.reshape(-1, 1, 2)
+            else:
+                continue
+
+            all_obj_pts.append(obj_pts)
+            all_img_pts.append(corners_formatted)
+            used_ids.append(marker_id)
+
+        if len(all_obj_pts) == 0:
+            return np.array([]), np.array([]), np.array([])
+
+        all_obj_pts = np.vstack(all_obj_pts).astype(np.float32)
+        all_img_pts = np.vstack(all_img_pts).astype(np.float32)
         rvecs, tvecs = [], []
-        for corners, id in zip(corners_list, ids_list):
-            rvec, tvec = self.estimate_pose_single(corners, id, marker_size)
-            rvecs.append(rvec)
-            tvecs.append(tvec)
+        
+        _, rvecs, tvecs = cv2.solvePnP(
+                all_obj_pts,
+                all_img_pts,
+                np.eye(3, dtype=np.float32),
+                np.zeros((1, 5), dtype=np.float32),
+                flags=cv2.SOLVEPNP_SQPNP
+            )
         return rvecs, tvecs
     
 if __name__ == "__main__":
@@ -204,11 +361,5 @@ if __name__ == "__main__":
 
     cam_params_file = "camera_params.npz"
     estimator = Estimator(cam_params_file)
-    poses = estimator.get_poses("C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_1p_1p_1.csv")
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    for rvec, tvec in poses:
-        #plot poses in 3d grid
-        if rvec is not None and tvec is not None:
-            ax.quiver(tvec[0], tvec[1], tvec[2], rvec[0], rvec[1], rvec[2], length=0.1)
-    plt.show()  
+    poses = estimator.get_poses("C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_2e_2e_1.csv")
+    estimator.save_computed_poses(poses, "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_2e_2e_1.csv")
