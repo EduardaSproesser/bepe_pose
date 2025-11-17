@@ -89,9 +89,8 @@ class DrawGraphs:
             if tvec is None or tvec_est is None:
                 continue
 
+            delta = np.linalg.norm(tvec - tvec_est)
             dist = np.linalg.norm(tvec)
-            dist_est = np.linalg.norm(tvec_est)
-            delta = abs(dist - dist_est) if abs_diff else (dist - dist_est)
 
             dists.append(dist)
             deltas.append(delta)
@@ -258,6 +257,70 @@ class DrawGraphs:
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.show()
 
+    def print_data_summary(self):
+        """
+        Prints a summary of the data including total entries, valid detections,
+        and basic statistics on translation and rotation errors.
+        """
+        total_entries = len(self.data)
+        valid_detections = self.data['n_valid'].dropna().astype(float).gt(0).sum()
+
+        translation_errors = []
+        rotation_errors = []
+
+        for index, row in self.data.iterrows():
+            if pd.notna(row['tvec']) and pd.notna(row['tvec_est']):
+                tvec = np.array([float(val) for val in row['tvec'].split(',')])
+                tvec_est = np.array([float(val) for val in row['tvec_est'].split(',')])
+                translation_errors.append(np.linalg.norm(tvec - tvec_est))
+
+            if pd.notna(row['rvec']) and pd.notna(row['rvec_est']):
+                rvec = np.array([float(val) for val in row['rvec'].split(',')])
+                rvec_est = np.array([float(val) for val in row['rvec_est'].split(',')])
+                rvec_n = rvec / np.linalg.norm(rvec)
+                rvec_est_n = rvec_est / np.linalg.norm(rvec_est)
+                rotation_errors.append(np.arccos(np.clip(np.dot(rvec_n, rvec_est_n), -1.0, 1.0)))
+
+        print(f"Total Entries: {total_entries}")
+        print(f"Valid Detections: {valid_detections}")
+        if translation_errors:
+            print(f"Mean Translation Error: {np.mean(translation_errors):.4f} units")
+            print(f"Median Translation Error: {np.median(translation_errors):.4f} units")
+        if rotation_errors:
+            print(f"Mean Rotation Error: {np.degrees(np.mean(rotation_errors)):.4f} degrees")
+            print(f"Median Rotation Error: {np.degrees(np.median(rotation_errors)):.4f} degrees")
+
+        # Print list with all angles x, y, z
+        angles_x_real = []
+        angles_y_real = []
+        angles_z_real = []
+        angles_x_est = []
+        angles_y_est = []
+        angles_z_est = []
+        # Print angles to compare in list form
+        # for index, row in self.data.iterrows():
+        #     if pd.notna(row['rvec']) and pd.notna(row['rvec_est']):
+        #         rvec = np.array([float(val) for val in row['rvec'].split(',')])
+        #         rvec_est = np.array([float(val) for val in row['rvec_est'].split(',')])
+        #         # Convert rotation vectors to rotation matrices
+        #         R_real, _ = cv2.Rodrigues(rvec)
+        #         R_est, _ = cv2.Rodrigues(rvec_est)
+        #         # Extract Euler angles (in radians)
+        #         angles_real = cv2.decomposeProjectionMatrix(np.hstack((R_real, np.zeros((3, 1)))))[6]
+        #         angles_est = cv2.decomposeProjectionMatrix(np.hstack((R_est, np.zeros((3, 1)))))[6]
+        #         angles_x_real.append(angles_real[0][0])
+        #         angles_y_real.append(angles_real[1][0])
+        #         angles_z_real.append(angles_real[2][0])
+        #         angles_x_est.append(angles_est[0][0])
+        #         angles_y_est.append(angles_est[1][0])
+        #         angles_z_est.append(angles_est[2][0])
+        # print("Real Angles X (radians):", angles_x_real)
+        # print("Estimated Angles X (radians):", angles_x_est)
+        # print("Real Angles Y (radians):", angles_y_real)
+        # print("Estimated Angles Y (radians):", angles_y_est)
+        # print("Real Angles Z (radians):", angles_z_real)
+        # print("Estimated Angles Z (radians):", angles_z_est)
+    
     def plot_rvec_comparison(self, index):
         """
         Plots the real and estimated rotation vectors (rvec and rvec_est) 
@@ -308,7 +371,8 @@ if __name__ == "__main__":
     csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_2e_2e_1_with_poses.csv"
     graph_drawer = DrawGraphs(csv_file)
     
-    graph_drawer.plot_3d_poses()
+    # graph_drawer.plot_3d_poses()
+    graph_drawer.print_data_summary()
     graph_drawer.plot_distance_difference_with_trend(abs_diff=True, show_r2=True)
     graph_drawer.plot_translation_errors_distance_bins()
     graph_drawer.plot_rotation_errors_distance_bins()
