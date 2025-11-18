@@ -365,6 +365,68 @@ class DrawGraphs:
 
         plt.show()
 
+    def xy_translation_mean_error_bins(self):
+        distances = []
+        errors = []
+
+        for index, row in self.data.iterrows():
+            if pd.notna(row['tvec']) and pd.notna(row['tvec_est']):
+                tvec = np.array([float(val) for val in row['tvec'].split(',')])
+                tvec_est = np.array([float(val) for val in row['tvec_est'].split(',')])
+                distance = np.linalg.norm(tvec)
+                error = np.linalg.norm(tvec[:2] - tvec_est[:2])  # XY plane error
+                distances.append(distance)
+                errors.append(error)
+
+        bins = self.distance_bins
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        mean_errors = []
+
+        for i in range(len(bins) - 1):
+            in_bin = [(d, e) for d, e in zip(distances, errors) if bins[i] <= d < bins[i + 1]]
+            if len(in_bin) > 0:
+                mean_errors.append(np.mean([e for _, e in in_bin]))
+            else:
+                mean_errors.append(np.nan)
+
+        plt.bar(bin_centers, mean_errors, width=(self.distance_bins[1] - self.distance_bins[0]) * 0.9, color='orchid', edgecolor='black')
+        plt.xlabel('Distance to Origin (units)')
+        plt.ylabel('Mean XY Translation Error (units)')
+        plt.title('XY Translation Error vs Distance')
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.show()
+
+    def z_translation_mean_error_bins(self):
+        distances = []
+        errors = []
+
+        for index, row in self.data.iterrows():
+            if pd.notna(row['tvec']) and pd.notna(row['tvec_est']):
+                tvec = np.array([float(val) for val in row['tvec'].split(',')])
+                tvec_est = np.array([float(val) for val in row['tvec_est'].split(',')])
+                distance = np.linalg.norm(tvec)
+                error = abs(tvec[2] - tvec_est[2])  # Z axis error
+                distances.append(distance)
+                errors.append(error)
+
+        bins = self.distance_bins
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        mean_errors = []
+
+        for i in range(len(bins) - 1):
+            in_bin = [(d, e) for d, e in zip(distances, errors) if bins[i] <= d < bins[i + 1]]
+            if len(in_bin) > 0:
+                mean_errors.append(np.mean([e for _, e in in_bin]))
+            else:
+                mean_errors.append(np.nan)
+
+        plt.bar(bin_centers, mean_errors, width=(self.distance_bins[1] - self.distance_bins[0]) * 0.9, color='cyan', edgecolor='black')
+        plt.xlabel('Distance to Origin (units)')
+        plt.ylabel('Mean Z Translation Error (units)')
+        plt.title('Z Translation Error vs Distance')
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        plt.show()
+
 
 if __name__ == "__main__":
     # Example usage
@@ -378,3 +440,5 @@ if __name__ == "__main__":
     graph_drawer.plot_rotation_errors_distance_bins()
     graph_drawer.detection_rate_distance_bins()
     graph_drawer.detection_rate_angle_bins()
+    graph_drawer.xy_translation_mean_error_bins()
+    graph_drawer.z_translation_mean_error_bins()

@@ -37,7 +37,9 @@ class Estimator:
     def undistort_points(self, pts):
         """Undistort points"""
         pts = np.array(pts, dtype=np.float64).reshape(-1, 1, 2)
-        undistorted_pts = cv2.undistortPoints(pts, self.K, self.D)
+        
+        undistorted_pts = cv2.omnidir.undistortPoints(pts, self.K, self.D, xi=self.XI, R=None)
+        # undistorted_pts = cv2.omnidir.undistortPoints(pts, self.K, self.D, xi=self.XI, R=np.eye(3))
         return undistorted_pts.reshape(-1, 2)
     
     def get_poses(self, csv_file):
@@ -122,9 +124,10 @@ class Estimator:
         for nv, c, i in zip(n_valid, corners, ids):
             if nv == 1:
                 # Try to estimate single marker pose if corners/ids available
-                # if len(c) > 0 and len(i) > 0:
+                if len(c) > 0 and len(i) > 0:
                 #     try:
-                #         rvec, tvec = self.estimate_pose_single(c[0], i[0], marker_size)
+                #         rvec, tvec = self.estimate_pose_single_raw(c[0], marker_size)
+                #         # rvec, tvec = self.estimate_pose_single(c[0], i[0], marker_size)
                 #         poses.append({'rvec': rvec, 'tvec': tvec / 0.69, 'ids': [int(i[0]) if not isinstance(i[0], (list, np.ndarray)) else int(i[0][0]) ]})
                 #     except Exception:
                 #         poses.append({'rvec': None, 'tvec': None, 'ids': []})
@@ -133,7 +136,7 @@ class Estimator:
             elif nv > 1:
                 rvecs, tvecs, used_ids = self.estimate_pose_multi(c, i, marker_type)
                 # Divide tvec by 0.69, considering it's a list
-                tvecs = [tvec / 1 for tvec in tvecs]
+                tvecs = [tvec / 0.69 for tvec in tvecs]
                 if rvecs is None or len(rvecs) == 0:
                     poses.append({'rvec': None, 'tvec': None, 'ids': []})
                 else:
@@ -199,7 +202,41 @@ class Estimator:
         # for i in range(8):
         #     print(f"Corner {i} in 2D  corresponds to 3D point: {obj_pts[i]}")
         pass
+    
+    def estimate_pose_single_raw(self, corners, marker_size):
+        """Estimate pose for a single marker detection."""
+        # Define 3D object points for the marker corners in marker frame (MF)
+        obj_points = np.array([
+            [-marker_size/2,  marker_size/2, 0],
+            [ marker_size/2,  marker_size/2, 0],
+            [ marker_size/2, -marker_size/2, 0],
+            [-marker_size/2, -marker_size/2, 0]
+        ], dtype=np.float32)
 
+        # Solve PnP using IPPE_SQUARE method
+        _, rvecs, tvecs, _ = cv2.solvePnPGeneric(
+            obj_points, 
+            np.array(corners, dtype=np.float32).reshape(1, 4, 2), 
+            np.eye(3, dtype=np.float32),
+            np.zeros((1, 5), dtype=np.float32),
+            flags=cv2.SOLVEPNP_IPPE_SQUARE
+        )
+
+        # Select solution pointing towards camera
+        best_idx, max_forward = 0, -np.inf
+        for i, rvec_cand in enumerate(rvecs):
+            R_cand, _ = cv2.Rodrigues(rvec_cand)
+            forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
+            if forward_score > max_forward:
+                max_forward = forward_score
+                best_idx = i
+
+        # rvec/tvec
+        rvecs = rvecs[best_idx]
+        tvecs = tvecs[best_idx].reshape(3, 1)
+
+        return rvecs, tvecs
+    
     def estimate_pose_single(self, corners, id, marker_size):
         """Estimate pose for a single marker detection."""
         # Define 3D object points for the marker corners in marker frame (MF)
@@ -258,6 +295,8 @@ class Estimator:
         # Adjust id to int
         id = int(id)
 
+        # Debug: print id
+        # print(f"Estimating pose for marker ID: {id}")
         Tmf_smf = Tmf_smf_dict[id]
         Tcf_mf = Tcf_smf @ np.linalg.inv(Tmf_smf)
         # Extract corrected rvec/tvec
@@ -269,6 +308,10 @@ class Estimator:
 
 
     def estimate_pose_multi(self, corners_list, ids_list, marker_type):
+
+        # Define marker size (mm)
+        marker_size_dict = {"1p": 8.2, "2e": 5.3, "3e": 4.35, "2v": 4.2, "3v": 4.2}
+        marker_size = marker_size_dict.get(marker_type)
 
         match marker_type:
             case "2e":
@@ -354,11 +397,21 @@ class Estimator:
 
         all_obj_pts = []
         all_img_pts = []
+        rvecs_initial = []
+        tvecs_initial = []
         used_ids = [] 
 
         # To all ided markers, collect their corners and corresponding 3D points
         for corners, id in zip(corners_list, ids_list):
             id = int(id)
+            # Get initial pose estimate for each marker using estimate_pose_single_raw
+            try:
+                # Do this for each id, 8 corners
+                rvec_init, tvec_init = self.estimate_pose_single_raw(corners, marker_size)
+                rvecs_initial.append(rvec_init)
+                tvecs_initial.append(tvec_init)
+            except Exception:
+                pass
             if id in marker_points_dict:
                 obj_pts = marker_points_dict[id]
                 img_pts = np.array(corners, dtype=np.float32).reshape(4, 2)
@@ -367,6 +420,14 @@ class Estimator:
                 all_img_pts.append(img_pts)
                 used_ids.append(id)
 
+        # Create a SINGLE initial estimate
+        if len(rvecs_initial) > 0:
+            rvec_init = np.mean(np.array(rvecs_initial), axis=0).reshape(3,1)
+            tvec_init = np.mean(np.array(tvecs_initial), axis=0).reshape(3,1)
+        else:
+            rvec_init = None
+            tvec_init = None
+
         if len(all_obj_pts) == 0:
             return np.array([]), np.array([]), np.array([])
 
@@ -374,26 +435,38 @@ class Estimator:
         all_img_pts = np.vstack(all_img_pts).astype(np.float32)
         rvecs, tvecs = [], []
         
-        self.check_point_variance(all_obj_pts)
+        # self.check_point_variance(all_obj_pts)
 
         self.check_order(all_obj_pts, all_img_pts, used_ids)
+
+        # Refine with SQPNP and initial guess
         _, rvecs, tvecs, reproj = cv2.solvePnPGeneric(
                 all_obj_pts,
                 all_img_pts,
                 np.eye(3, dtype=np.float32),
                 np.zeros((1, 5), dtype=np.float32),
-                flags=cv2.SOLVEPNP_SQPNP
+                rvecs=rvec_init,
+                tvecs=tvec_init,
+                useExtrinsicGuess=True,
+                flags=cv2.SOLVEPNP_
             )
         
+        # Get best solution, pointing towards camera
+        best_idx, max_forward = 0, -np.inf
+        for i, rvec_cand in enumerate(rvecs):
+            R_cand, _ = cv2.Rodrigues(rvec_cand)
+            forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
+            if forward_score > max_forward:
+                max_forward = forward_score
+                best_idx = i
+        rvecs = [rvecs[best_idx]]
+        tvecs = [tvecs[best_idx]]
 
-        # Get best solution, smaller reproj
-        errors = [np.sum(r) for r in reproj]
-        best_idx = np.argmin(errors)
+        # if rvec_init is not None and tvec_init is not None:
+        #     print("Initial rvec:", rvec_init.flatten(), "tvec:", tvec_init.flatten())
+        #     print(f"Refined rvec: {rvecs[0].flatten()}, tvec: {tvecs[0].flatten()}")
 
-        rvecs = rvecs[best_idx]
-        tvecs = tvecs[best_idx]
-
-        proj, _ = cv2.projectPoints(all_obj_pts, rvecs, tvecs, np.eye(3, dtype=np.float32), np.zeros((1, 5), dtype=np.float32))
+        # proj, _ = cv2.projectPoints(all_obj_pts, rvecs, tvecs, np.eye(3, dtype=np.float32), np.zeros((1, 5), dtype=np.float32))
 
         # plt.figure(figsize=(6,6))
         # plt.scatter(all_obj_pts[:,0], all_obj_pts[:,1], label="3D points")
