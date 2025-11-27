@@ -122,35 +122,36 @@ class Estimator:
         # Estimate pose for each image
         poses = []
         for nv, c, i in zip(n_valid, corners, ids):
-            if nv == 1:
+            # if nv == 1:
                 # Try to estimate single marker pose if corners/ids available
-                if len(c) > 0 and len(i) > 0:
+                if len(c) > 0 and len(i) > 0 and (i[0] == 4):
                 #     try:
-                #         rvec, tvec = self.estimate_pose_single_raw(c[0], marker_size)
+                    # rvec, tvec = self.estimate_pose_single_raw(c[0], marker_size)
+                    rvec, tvec = self.estimate_pose_single(c[0], i[0], marker_size)
                 #         # rvec, tvec = self.estimate_pose_single(c[0], i[0], marker_size)
-                #         poses.append({'rvec': rvec, 'tvec': tvec / 0.69, 'ids': [int(i[0]) if not isinstance(i[0], (list, np.ndarray)) else int(i[0][0]) ]})
+                    poses.append({'rvec': rvec, 'tvec': tvec / 0.69, 'ids': [int(i[0]) if not isinstance(i[0], (list, np.ndarray)) else int(i[0][0]) ]})
                 #     except Exception:
                 #         poses.append({'rvec': None, 'tvec': None, 'ids': []})
-                # else:
-                    poses.append({'rvec': None, 'tvec': None, 'ids': []})
-            elif nv > 1:
-                rvecs, tvecs, used_ids = self.estimate_pose_multi(c, i, marker_type)
-                # Divide tvec by 0.69, considering it's a list
-                tvecs = [tvec / 0.69 for tvec in tvecs]
-                if rvecs is None or len(rvecs) == 0:
-                    poses.append({'rvec': None, 'tvec': None, 'ids': []})
                 else:
-                    poses.append({'rvec': rvecs, 'tvec': tvecs, 'ids': used_ids})
-            else:
-                poses.append({'rvec': None, 'tvec': None, 'ids': []})
+                    poses.append({'rvec': None, 'tvec': None, 'ids': []})
+            # elif nv > 1:
+            #     rvecs, tvecs, used_ids = self.estimate_pose_multi(c, i, marker_type)
+            #     # Divide tvec by 0.69, considering it's a list
+            #     tvecs = [tvec / 0.69 for tvec in tvecs]
+            #     if rvecs is None or len(rvecs) == 0:
+            #         poses.append({'rvec': None, 'tvec': None, 'ids': []})
+            #     else:
+            #         poses.append({'rvec': rvecs, 'tvec': tvecs, 'ids': used_ids})
+            # else:
+                # poses.append({'rvec': None, 'tvec': None, 'ids': []})
 
         return poses
 
     def check_point_variance(self, all_obj_pts):
         cov = np.cov(all_obj_pts.T)
         eigvals = np.linalg.eigvalsh(cov)
-        print("Object points covariance eigenvalues:", eigvals)
-        print("Condition (max/min):", float(eigvals.max()/max(eigvals.min(), 1e-12)))
+        # print("Object points covariance eigenvalues:", eigvals)
+        # print("Condition (max/min):", float(eigvals.max()/max(eigvals.min(), 1e-12)))
         return eigvals
 
 
@@ -247,7 +248,7 @@ class Estimator:
             [-marker_size/2, -marker_size/2, 0]
         ], dtype=np.float32)
         # Solve PnP using IPPE_SQUARE method
-        retval, rvecs, tvecs, _ = cv2.solvePnPGeneric(
+        _, rvecs, tvecs, _ = cv2.solvePnPGeneric(
             obj_points, 
             np.array(corners, dtype=np.float32).reshape(1, 4, 2), 
             np.eye(3, dtype=np.float32),
@@ -260,7 +261,7 @@ class Estimator:
         for i, rvec_cand in enumerate(rvecs):
             R_cand, _ = cv2.Rodrigues(rvec_cand)
             forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
-            if forward_score < max_forward:
+            if forward_score > max_forward:
                 max_forward = forward_score
                 best_idx = i
 
@@ -272,23 +273,41 @@ class Estimator:
         Tcf_smf[:3, :3] = R_cf_smf
         Tcf_smf[:3, 3] = t_cf_smf.flatten()
 
-        # Get angle around Z axis to determine marker orientation
-        angle_z = np.rad2deg(rvecs[best_idx][2][0])
+        # Get angle around Y axis
+        angle_x = np.degrees(rvecs[best_idx][0][0])
         # Transformation MF -> SMF (known)
         Tmf_smf_dict = { 
             5: np.array([[1, 0, 0, 0],
                         [0, 1, 0, 0],
                         [0, 0, 1, 3.09], #3.09
                         [0, 0, 0, 1]]), 
-
+            # -15 around x
             1: np.array([[1, 0, 0, 0],
-                        [0, np.cos(np.deg2rad(165)),-np.sin(np.deg2rad(165)), 5.416],
-                        [0, np.sin(np.deg2rad(165)), np.cos(np.deg2rad(165)), -4.407],
+                        [0, 0.9659, 0.2588, 5.416],
+                        [0, -0.2588, 0.9659, 4.407],
                         [0, 0, 0, 1]]),
-
+            # +15 around x
             0: np.array([[1, 0, 0, 0],
-                        [0, np.cos(np.deg2rad(15)),-np.sin(np.deg2rad(15)), -5.416],
-                        [0, np.sin(np.deg2rad(15)), np.cos(np.deg2rad(15)), 4.407],
+                        [0, 0.9659, -0.2588, -5.416],
+                        [0, 0.2588, 0.9659, 4.407],
+                        [0, 0, 0, 1]]),
+            # Rotation Angles (degrees): X: 0, Y: 15, Z: 0
+            # Translation Vector: [ 6.75 0  4.059]
+            2: np.array([[0.9659, 0, 0.2588, 6.75],
+                        [0, 1, 0, 0],
+                        [-0.2588, 0, 0.9659, 4.059],
+                        [0, 0, 0, 1]]),
+            # Rotation Angles (degrees): X: -15, Y: 0, Z: 33.2
+            # Translation Vector: [-3.344  5.812  4.061]
+            3: np.array([[0.8387, -0.2756, 0.4695, -3.344],
+                        [0.2756, 0.9613, 0.0081, 5.812],
+                        [-0.4695, 0.0362, 0.8823, 4.061],
+                        [0, 0, 0, 1]]),
+            # Rotation Angles (degrees): X: 15, Y: 0, Z: -28.9
+            # Translation Vector: [-3.357 -5.815  4.059]
+            4: np.array([[0.8823, 0.2756, -0.3827, -3.357],
+                        [-0.2756, 0.9613, 0.0081, -5.815],
+                        [0.3827, -0.0081, 0.9241, 4.059],
                         [0, 0, 0, 1]])
         }
         # Get Tmf_smf for this id
@@ -303,6 +322,10 @@ class Estimator:
         R_cf_mf = Tcf_mf[:3, :3]
         corrected_tvec = Tcf_mf[:3, 3].reshape(3, 1)
         corrected_rvec, _ = cv2.Rodrigues(R_cf_mf)
+
+        #Print debug info. Poses before and after correction
+        # print(f"Before correction: rvec: {rvecs[best_idx].flatten()}, tvec: {tvecs[best_idx].flatten()}")
+        # print(f"After correction: rvec: {corrected_rvec.flatten()}, tvec: {corrected_tvec.flatten()}")
 
         return corrected_rvec, corrected_tvec
 
@@ -440,7 +463,7 @@ class Estimator:
         self.check_order(all_obj_pts, all_img_pts, used_ids)
 
         # Refine with SQPNP and initial guess
-        _, rvecs, tvecs, reproj = cv2.solvePnPGeneric(
+        _, rvecs, tvecs, _ = cv2.solvePnPGeneric(
                 all_obj_pts,
                 all_img_pts,
                 np.eye(3, dtype=np.float32),
@@ -448,15 +471,17 @@ class Estimator:
                 rvecs=rvec_init,
                 tvecs=tvec_init,
                 useExtrinsicGuess=True,
-                flags=cv2.SOLVEPNP_
+                flags=cv2.SOLVEPNP_SQPNP
             )
         
+        # Check covariance of point distribution
+        self.check_point_variance(all_obj_pts)
         # Get best solution, pointing towards camera
         best_idx, max_forward = 0, -np.inf
         for i, rvec_cand in enumerate(rvecs):
             R_cand, _ = cv2.Rodrigues(rvec_cand)
             forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
-            if forward_score > max_forward:
+            if forward_score < max_forward:
                 max_forward = forward_score
                 best_idx = i
         rvecs = [rvecs[best_idx]]
@@ -482,6 +507,6 @@ if __name__ == "__main__":
 
     cam_params_file = "camera_params.npz"
     estimator = Estimator(cam_params_file)
-    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_2e_2e_1.csv"
+    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_3e_3e_3.csv"
     poses = estimator.get_poses(csv_file)
     estimator.save_computed_poses(poses, csv_file)

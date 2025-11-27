@@ -75,7 +75,7 @@ class FindTransformation:
 # Example usage:
 
 if __name__ == "__main__":
-    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_1p_1p_1_with_poses.csv"
+    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_3e_3e_3_with_poses.csv"
     finder = FindTransformation(csv_file)
 
     mean_transformations = finder.compute_mean_transformations()

@@ -18,25 +18,120 @@ class DrawGraphs:
         self.angle_bins = np.arange(0, np.pi/2 + np.deg2rad(5), np.deg2rad(5))
         self.distance_bins = np.arange(0, 300 + 25, 25)
 
-    def plot_3d_poses(self):
+    # ----------------- Helpers for parsing and outlier filtering -----------------
+    def _parse_vec(self, s):
+        """Parse a string like "x,y,z" or an iterable into a numpy array of shape (3,).
+        Returns None when parsing fails.
+        """
+        if pd.isna(s):
+            return None
+        if isinstance(s, (list, tuple, np.ndarray)):
+            arr = np.array(s, dtype=float)
+            return arr if arr.size == 3 else None
+        try:
+            parts = [p for p in str(s).split(',') if p.strip() != '']
+            if len(parts) != 3:
+                return None
+            return np.array([float(p) for p in parts], dtype=float)
+        except Exception:
+            return None
+
+    def filter_df_by_pose(self, thresh=3.5, features=('tvec', 'rvec')):
+        """Return a filtered copy of self.data removing pose outliers.
+
+        Strategy (robust): compute modified z-score using MAD for selected pose
+        features (tvec components, tvec norm, rvec components, rvec norm). A row
+        is removed when any feature's modified z-score exceeds `thresh`.
+
+        Returns a DataFrame with only rows that have parseable `tvec` and `rvec`
+        and that are not flagged as outliers.
+        """
+        df = self.data.copy()
+
+        parsed_t = []
+        parsed_r = []
+        valid_idx = []
+
+        # parse all rows first
+        for idx, row in df.iterrows():
+            t = self._parse_vec(row.get('tvec', None))
+            r = self._parse_vec(row.get('rvec', None))
+            if t is None or r is None:
+                parsed_t.append(None)
+                parsed_r.append(None)
+                continue
+            parsed_t.append(t)
+            parsed_r.append(r)
+            valid_idx.append(idx)
+
+        if len(valid_idx) == 0:
+            return df.iloc[[]]  # empty
+
+        tvecs = np.vstack([parsed_t[i] for i in range(len(parsed_t)) if parsed_t[i] is not None])
+        rvecs = np.vstack([parsed_r[i] for i in range(len(parsed_r)) if parsed_r[i] is not None])
+
+        # features to evaluate: tvec x,y,z and t_norm; rvec x,y,z and r_norm
+        t_norm = np.linalg.norm(tvecs, axis=1)
+        r_norm = np.linalg.norm(rvecs, axis=1)
+
+        # Build feature matrix aligned with valid rows
+        feats = np.hstack([tvecs, t_norm.reshape(-1, 1), rvecs, r_norm.reshape(-1, 1)])
+
+        # Robust modified z-score per column (using MAD)
+        medians = np.median(feats, axis=0)
+        mad = np.median(np.abs(feats - medians), axis=0)
+
+        # Avoid division by zero: fallback to std if mad == 0, else fall back to no-scaling
+        stds = np.std(feats, axis=0)
+
+        modified_z = np.zeros_like(feats)
+        for j in range(feats.shape[1]):
+            if mad[j] > 0:
+                modified_z[:, j] = 0.6745 * (feats[:, j] - medians[j]) / mad[j]
+            elif stds[j] > 0:
+                modified_z[:, j] = (feats[:, j] - np.mean(feats[:, j])) / stds[j]
+            else:
+                modified_z[:, j] = 0.0
+
+        # Mark outliers where any feature exceeds threshold
+        outlier_mask_valid_rows = np.any(np.abs(modified_z) > thresh, axis=1)
+
+        # Build final boolean keep mask aligned with df.index
+        keep_mask = np.zeros(len(df), dtype=bool)
+        valid_rows = [i for i, v in enumerate(parsed_t) if v is not None]
+        # valid_rows maps positions in parsed lists to positions in feats (and outlier_mask)
+        feat_idx = 0
+        for pos, parsed in enumerate(parsed_t):
+            if parsed is None:
+                keep_mask[pos] = False
+            else:
+                keep_mask[pos] = not outlier_mask_valid_rows[feat_idx]
+                feat_idx += 1
+
+        return df[keep_mask].reset_index(drop=True)
+
+
+    def plot_3d_poses(self, filter_outliers=True):
         # Plot real and estimates poses in 3D grid (only points)
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
-        for index, row in self.data.iterrows():
+        df = self.filter_df_by_pose() if filter_outliers else self.data
+
+        for index, row in df.iterrows():
             # Real poses
             rvec_str = row['rvec']
             tvec_str = row['tvec']
             if pd.notna(rvec_str) and pd.notna(tvec_str):
-                rvec = np.array([float(val) for val in rvec_str.split(',')])
-                tvec = np.array([float(val) for val in tvec_str.split(',')])
+                rvec = self._parse_vec(rvec_str)
+                tvec = self._parse_vec(tvec_str)
                 ax.scatter(tvec[0], tvec[1], tvec[2], c='b', marker='o', label='Real' if index == 0 else "")
             
             # Estimated poses
             rvec_est_str = row['rvec_est']
             tvec_est_str = row['tvec_est']
             if pd.notna(rvec_est_str) and pd.notna(tvec_est_str):
-                rvec_est = np.array([float(val) for val in rvec_est_str.split(',')])
-                tvec_est = np.array([float(val) for val in tvec_est_str.split(',')])
+                rvec_est = self._parse_vec(rvec_est_str)
+                tvec_est = self._parse_vec(tvec_est_str)
                 ax.scatter(tvec_est[0], tvec_est[1], tvec_est[2], c='r', marker='^', label='Estimated' if index == 0 else "")
 
         ax.set_xlabel('X')
@@ -75,7 +170,9 @@ class DrawGraphs:
         dists = []
         deltas = []
 
-        for idx, row in self.data.iterrows():
+        df = self.filter_df_by_pose()  # por padrão aplica o filtro robusto
+
+        for idx, row in df.iterrows():
             # somente entradas com detecção válida
             try:
                 if 'n_valid' in row and (pd.isna(row['n_valid']) or float(row['n_valid']) <= 0):
@@ -84,8 +181,8 @@ class DrawGraphs:
                 # se n_valid não for numérico, tenta converter; caso falhe, assume válido
                 pass
 
-            tvec = parse_vec(row.get('tvec', None))
-            tvec_est = parse_vec(row.get('tvec_est', None))
+            tvec = self._parse_vec(row.get('tvec', None))
+            tvec_est = self._parse_vec(row.get('tvec_est', None))
             if tvec is None or tvec_est is None:
                 continue
 
@@ -134,11 +231,14 @@ class DrawGraphs:
     def plot_translation_errors_distance_bins(self):
         distances = []
         errors = []
+        df = self.filter_df_by_pose()
 
-        for index, row in self.data.iterrows():
-            if pd.notna(row['tvec']) and pd.notna(row['tvec_est']):
-                tvec = np.array([float(val) for val in row['tvec'].split(',')])
-                tvec_est = np.array([float(val) for val in row['tvec_est'].split(',')])
+        for index, row in df.iterrows():
+            if pd.notna(row.get('tvec')) and pd.notna(row.get('tvec_est')):
+                tvec = self._parse_vec(row.get('tvec'))
+                tvec_est = self._parse_vec(row.get('tvec_est'))
+                if tvec is None or tvec_est is None:
+                    continue
                 distance = np.linalg.norm(tvec)
                 error = np.linalg.norm(tvec - tvec_est)
                 distances.append(distance)
@@ -166,12 +266,15 @@ class DrawGraphs:
     def plot_rotation_errors_distance_bins(self):
         distances = []
         errors = []
+        df = self.filter_df_by_pose()
 
-        for index, row in self.data.iterrows():
-            if pd.notna(row['rvec']) and pd.notna(row['rvec_est']) and pd.notna(row['tvec']):
-                rvec = np.array([float(val) for val in row['rvec'].split(',')])
-                rvec_est = np.array([float(val) for val in row['rvec_est'].split(',')])
-                tvec = np.array([float(val) for val in row['tvec'].split(',')])
+        for index, row in df.iterrows():
+            if pd.notna(row.get('rvec')) and pd.notna(row.get('rvec_est')) and pd.notna(row.get('tvec')):
+                rvec = self._parse_vec(row.get('rvec'))
+                rvec_est = self._parse_vec(row.get('rvec_est'))
+                tvec = self._parse_vec(row.get('tvec'))
+                if rvec is None or rvec_est is None or tvec is None:
+                    continue
                 distance = np.linalg.norm(tvec)
                 # Rotation error as angle between vectors
                 rvec_n = rvec / np.linalg.norm(rvec)
@@ -205,9 +308,13 @@ class DrawGraphs:
         total_counts = np.zeros(len(bins) - 1)
         valid_counts = np.zeros(len(bins) - 1)
 
-        for index, row in self.data.iterrows():
-            if pd.notna(row['tvec']):
-                tvec = np.array([float(val) for val in row['tvec'].split(',')])
+        df = self.filter_df_by_pose()
+
+        for index, row in df.iterrows():
+            if pd.notna(row.get('tvec')):
+                tvec = self._parse_vec(row.get('tvec'))
+                if tvec is None:
+                    continue
                 distance = np.linalg.norm(tvec)
                 bin_index = np.digitize(distance, bins) - 1
                 if 0 <= bin_index < len(total_counts):
@@ -232,9 +339,13 @@ class DrawGraphs:
         total_counts = np.zeros(len(bins) - 1)
         valid_counts = np.zeros(len(bins) - 1)
 
-        for index, row in self.data.iterrows():
-            if pd.notna(row['tvec']):
-                tvec = np.array([float(val) for val in row['tvec'].split(',')])
+        df = self.filter_df_by_pose()
+
+        for index, row in df.iterrows():
+            if pd.notna(row.get('tvec')):
+                tvec = self._parse_vec(row.get('tvec'))
+                if tvec is None:
+                    continue
                 # Ângulo entre vetor e plano XY = ângulo entre vetor e seu componente no plano XY
                 xy_norm = np.linalg.norm(tvec[:2])
                 total_norm = np.linalg.norm(tvec)
@@ -369,10 +480,14 @@ class DrawGraphs:
         distances = []
         errors = []
 
-        for index, row in self.data.iterrows():
-            if pd.notna(row['tvec']) and pd.notna(row['tvec_est']):
-                tvec = np.array([float(val) for val in row['tvec'].split(',')])
-                tvec_est = np.array([float(val) for val in row['tvec_est'].split(',')])
+        df = self.filter_df_by_pose()
+
+        for index, row in df.iterrows():
+            if pd.notna(row.get('tvec')) and pd.notna(row.get('tvec_est')):
+                tvec = self._parse_vec(row.get('tvec'))
+                tvec_est = self._parse_vec(row.get('tvec_est'))
+                if tvec is None or tvec_est is None:
+                    continue
                 distance = np.linalg.norm(tvec)
                 error = np.linalg.norm(tvec[:2] - tvec_est[:2])  # XY plane error
                 distances.append(distance)
@@ -400,10 +515,14 @@ class DrawGraphs:
         distances = []
         errors = []
 
-        for index, row in self.data.iterrows():
-            if pd.notna(row['tvec']) and pd.notna(row['tvec_est']):
-                tvec = np.array([float(val) for val in row['tvec'].split(',')])
-                tvec_est = np.array([float(val) for val in row['tvec_est'].split(',')])
+        df = self.filter_df_by_pose()
+
+        for index, row in df.iterrows():
+            if pd.notna(row.get('tvec')) and pd.notna(row.get('tvec_est')):
+                tvec = self._parse_vec(row.get('tvec'))
+                tvec_est = self._parse_vec(row.get('tvec_est'))
+                if tvec is None or tvec_est is None:
+                    continue
                 distance = np.linalg.norm(tvec)
                 error = abs(tvec[2] - tvec_est[2])  # Z axis error
                 distances.append(distance)
@@ -430,7 +549,7 @@ class DrawGraphs:
 
 if __name__ == "__main__":
     # Example usage
-    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_2e_2e_1_with_poses.csv"
+    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_3e_3e_3_with_poses.csv"
     graph_drawer = DrawGraphs(csv_file)
     
     # graph_drawer.plot_3d_poses()
@@ -442,3 +561,6 @@ if __name__ == "__main__":
     graph_drawer.detection_rate_angle_bins()
     graph_drawer.xy_translation_mean_error_bins()
     graph_drawer.z_translation_mean_error_bins()
+
+    # for i in range(len(graph_drawer.data)):
+    #     graph_drawer.plot_rvec_comparison(i)
