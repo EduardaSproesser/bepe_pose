@@ -91,8 +91,8 @@ class CornerFinder:
     def transform_pf_to_cf(self, px,py,pz,pe):
         
         # PF0 in CF coordinates
-        #PF0_inCF = np.array([153.865,-137.38,38.24+2.5]) #mm original
-        PF0_inCF = np.array([153.865+0.44689565,-137.38+1.1555734,38.24+2.5+6.07420073]) #mm
+        PF0_inCF = np.array([153.865,-137.38,38.24+2.5]) #mm original
+        # PF0_inCF = np.array([153.865+0.44689565,-137.38+1.1555734,38.24+2.5+6.07420073]) #mm
 
 
         cfRpf = np.array([[ -1, 0,  0],

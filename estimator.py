@@ -122,28 +122,27 @@ class Estimator:
         # Estimate pose for each image
         poses = []
         for nv, c, i in zip(n_valid, corners, ids):
-            # if nv == 1:
+            if nv == 1:
                 # Try to estimate single marker pose if corners/ids available
-                if len(c) > 0 and len(i) > 0 and (i[0] == 4):
-                #     try:
+                if len(c) > 0 and len(i) > 0:
+                    try:
                     # rvec, tvec = self.estimate_pose_single_raw(c[0], marker_size)
-                    rvec, tvec = self.estimate_pose_single(c[0], i[0], marker_size)
-                #         # rvec, tvec = self.estimate_pose_single(c[0], i[0], marker_size)
-                    poses.append({'rvec': rvec, 'tvec': tvec / 0.69, 'ids': [int(i[0]) if not isinstance(i[0], (list, np.ndarray)) else int(i[0][0]) ]})
-                #     except Exception:
-                #         poses.append({'rvec': None, 'tvec': None, 'ids': []})
+                        rvec, tvec = self.estimate_pose_single(c[0], i[0], marker_size)
+                        poses.append({'rvec': rvec, 'tvec': tvec / 0.69, 'ids': [int(i[0]) if not isinstance(i[0], (list, np.ndarray)) else int(i[0][0]) ]})
+                    except Exception:
+                        poses.append({'rvec': None, 'tvec': None, 'ids': []})
                 else:
                     poses.append({'rvec': None, 'tvec': None, 'ids': []})
-            # elif nv > 1:
-            #     rvecs, tvecs, used_ids = self.estimate_pose_multi(c, i, marker_type)
-            #     # Divide tvec by 0.69, considering it's a list
-            #     tvecs = [tvec / 0.69 for tvec in tvecs]
-            #     if rvecs is None or len(rvecs) == 0:
-            #         poses.append({'rvec': None, 'tvec': None, 'ids': []})
-            #     else:
-            #         poses.append({'rvec': rvecs, 'tvec': tvecs, 'ids': used_ids})
-            # else:
-                # poses.append({'rvec': None, 'tvec': None, 'ids': []})
+            elif nv > 1:
+                rvecs, tvecs, used_ids = self.estimate_pose_multi(c, i, marker_type)
+                # Divide tvec by 0.69, considering it's a list
+                tvecs = [tvec / 0.69 for tvec in tvecs]
+                if rvecs is None or len(rvecs) == 0:
+                    poses.append({'rvec': None, 'tvec': None, 'ids': []})
+                else:
+                    poses.append({'rvec': rvecs, 'tvec': tvecs, 'ids': used_ids})
+            else:
+                poses.append({'rvec': None, 'tvec': None, 'ids': []})
 
         return poses
 
@@ -256,12 +255,12 @@ class Estimator:
             flags=cv2.SOLVEPNP_IPPE_SQUARE
         )
 
-        # Select solution pointing towards camera
+        # Select solution pointing towards camera, arrow point towards negative z
         best_idx, max_forward = 0, -np.inf
         for i, rvec_cand in enumerate(rvecs):
             R_cand, _ = cv2.Rodrigues(rvec_cand)
             forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
-            if forward_score > max_forward:
+            if forward_score < max_forward:
                 max_forward = forward_score
                 best_idx = i
 
@@ -277,38 +276,60 @@ class Estimator:
         angle_x = np.degrees(rvecs[best_idx][0][0])
         # Transformation MF -> SMF (known)
         Tmf_smf_dict = { 
-            5: np.array([[1, 0, 0, 0],
-                        [0, 1, 0, 0],
-                        [0, 0, 1, 3.09], #3.09
-                        [0, 0, 0, 1]]), 
-            # -15 around x
-            1: np.array([[1, 0, 0, 0],
-                        [0, 0.9659, 0.2588, 5.416],
-                        [0, -0.2588, 0.9659, 4.407],
-                        [0, 0, 0, 1]]),
-            # +15 around x
-            0: np.array([[1, 0, 0, 0],
-                        [0, 0.9659, -0.2588, -5.416],
-                        [0, 0.2588, 0.9659, 4.407],
-                        [0, 0, 0, 1]]),
-            # Rotation Angles (degrees): X: 0, Y: 15, Z: 0
-            # Translation Vector: [ 6.75 0  4.059]
-            2: np.array([[0.9659, 0, 0.2588, 6.75],
-                        [0, 1, 0, 0],
-                        [-0.2588, 0, 0.9659, 4.059],
-                        [0, 0, 0, 1]]),
-            # Rotation Angles (degrees): X: -15, Y: 0, Z: 33.2
-            # Translation Vector: [-3.344  5.812  4.061]
-            3: np.array([[0.8387, -0.2756, 0.4695, -3.344],
-                        [0.2756, 0.9613, 0.0081, 5.812],
-                        [-0.4695, 0.0362, 0.8823, 4.061],
-                        [0, 0, 0, 1]]),
-            # Rotation Angles (degrees): X: 15, Y: 0, Z: -28.9
-            # Translation Vector: [-3.357 -5.815  4.059]
-            4: np.array([[0.8823, 0.2756, -0.3827, -3.357],
-                        [-0.2756, 0.9613, 0.0081, -5.815],
-                        [0.3827, -0.0081, 0.9241, 4.059],
-                        [0, 0, 0, 1]])
+            5: np.array([[9.99999940e-01, 1.26880515e-08, 0.00000000e+00, 0.00000000e+00],
+                        [1.26880515e-08, 9.99999940e-01, 0.00000000e+00, 0.00000000e+00],
+                        [0.00000000e+00, 0.00000000e+00, 1.00000000e+00, 3.08999991e+00],
+                        [0.00000000e+00, 0.00000000e+00, 0.00000000e+00, 1.00000000e+00]]), 
+
+            1: np.array([[ 1.00000000e+00,  9.76797310e-10,  2.14449414e-09,  0.00000000e+00],
+                        [-1.49827084e-09,  9.65955615e-01,  2.58707821e-01,  5.41650009e+00],
+                        [-1.81892457e-09, -2.58707821e-01,  9.65955615e-01,  4.40649986e+00],
+                        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]]),
+
+            0: np.array([[ 1.00000000e+00,  3.80532583e-09, -2.34197373e-09,  0.00000000e+00],
+                        [-4.28432001e-09,  9.65955615e-01, -2.58707821e-01, -5.41650009e+00],
+                        [ 1.27728439e-09,  2.58707821e-01,  9.65955615e-01,  4.40649986e+00],
+                        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]]),
+
+            2: np.array([[ 9.65916097e-01, -6.01903594e-09,  2.58855402e-01,  6.71450043e+00],
+                        [ 6.47105480e-09,  1.00000000e+00, -8.94992969e-10,  0.00000000e+00],
+                        [-2.58855402e-01,  2.53953658e-09,  9.65916097e-01,  4.05849981e+00],
+                        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]]),
+
+            3: np.array( [[ 8.65997076e-01, -4.83002186e-01, -1.29452437e-01, -3.34375000e+00],
+                        [ 5.00049055e-01,  8.36473346e-01,  2.24194840e-01,  5.81149960e+00],
+                        [-3.09603865e-06, -2.58884639e-01,  9.65908229e-01,  4.06150007e+00],
+                        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]]),
+
+            4: np.array([[ 8.66036713e-01,  4.82932806e-01, -1.29446656e-01, -3.35749984e+00],
+                        [-4.99980509e-01,  8.36508989e-01, -2.24214792e-01, -5.81549978e+00],
+                        [ 2.61260084e-06,  2.58899063e-01,  9.65904415e-01,  4.05849981e+00],
+                        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]]),
+            
+            6: np.array([[ 7.07106769e-01, -7.07106769e-01, -9.22171228e-09,  0.00000000e+00],
+                        [ 6.83015645e-01,  6.83015704e-01,  2.58803368e-01,  5.93499994e+00],
+                        [-1.83001608e-01, -1.83001608e-01,  9.65930045e-01,  4.26775026e+00],
+                        [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  1.00000000e+00]]),
+
+            7: np.array([[ 0.70710677, -0.70710677,  0.,  0.        ],
+                        [ 0.68301564,  0.68301564, -0.25880337, -5.93500042],
+                        [ 0.18300161,  0.18300161,  0.96593004,  4.26774979],
+                        [ 0., 0., 0., 1.]]),
+
+            8: np.array([[ 0.68301564, -0.68301564,  0.25880337,  5.93499994],
+                        [ 0.70710677,  0.70710677,  0.,          0.        ],
+                        [-0.18300161,  0.18300161,  0.96593004,  4.26775026],
+                        [ 0.,          0.,          0.,          1.        ]]),
+
+            9: np.array([[ 0.95387042,  0.27090976, -0.12938012, -2.96700001],
+                        [-0.23800635,  0.94505203,  0.22411962,  5.13950014],
+                        [ 0.18298715, -0.18298778,  0.96593541,  4.26774979],
+                        [ 0.,          0.,          0.,          1.        ]]),
+
+            10: np.array([[ 0.95387042, -0.27090973, -0.12938009, -2.96399999],
+                        [ 0.23800628,  0.94505209, -0.22411956, -5.15249968],
+                        [ 0.18298708,  0.18298773,  0.96593541,  4.26524973],
+                        [ 0.,          0.,          0.,          1.]])
         }
         # Get Tmf_smf for this id
         # Adjust id to int
@@ -430,7 +451,7 @@ class Estimator:
             # Get initial pose estimate for each marker using estimate_pose_single_raw
             try:
                 # Do this for each id, 8 corners
-                rvec_init, tvec_init = self.estimate_pose_single_raw(corners, marker_size)
+                rvec_init, tvec_init = self.estimate_pose_single(corners, id, marker_size)
                 rvecs_initial.append(rvec_init)
                 tvecs_initial.append(tvec_init)
             except Exception:
@@ -443,49 +464,140 @@ class Estimator:
                 all_img_pts.append(img_pts)
                 used_ids.append(id)
 
-        # Create a SINGLE initial estimate
-        if len(rvecs_initial) > 0:
-            rvec_init = np.mean(np.array(rvecs_initial), axis=0).reshape(3,1)
-            tvec_init = np.mean(np.array(tvecs_initial), axis=0).reshape(3,1)
-        else:
-            rvec_init = None
-            tvec_init = None
+        ## Create a SINGLE initial estimate using estimate pose single
+        # if len(rvecs_initial) > 0:
+        #     # get one initial estimate
+        #     rvec_init = rvecs_initial[0]
+        #     tvec_init = tvecs_initial[0]
+        # else:
+        #     rvec_init = None
+        #     tvec_init = None
 
-        if len(all_obj_pts) == 0:
-            return np.array([]), np.array([]), np.array([])
+        # all_obj_pts = np.vstack(all_obj_pts).astype(np.float32)
+        # all_img_pts = np.vstack(all_img_pts).astype(np.float32)
 
-        all_obj_pts = np.vstack(all_obj_pts).astype(np.float32)
-        all_img_pts = np.vstack(all_img_pts).astype(np.float32)
+        # Simple solution!!!
         rvecs, tvecs = [], []
+        # rvec, tvecs = single estimate mean
+        rvecs = [np.mean(np.array(rvecs_initial), axis=0)] if len(rvecs_initial) > 0 else []
+        tvecs = [np.mean(np.array(tvecs_initial), axis=0)] if len(tvecs_initial) > 0 else []
         
         # self.check_point_variance(all_obj_pts)
 
-        self.check_order(all_obj_pts, all_img_pts, used_ids)
+        # self.check_order(all_obj_pts, all_img_pts, used_ids)
 
-        # Refine with SQPNP and initial guess
-        _, rvecs, tvecs, _ = cv2.solvePnPGeneric(
-                all_obj_pts,
-                all_img_pts,
-                np.eye(3, dtype=np.float32),
-                np.zeros((1, 5), dtype=np.float32),
-                rvecs=rvec_init,
-                tvecs=tvec_init,
-                useExtrinsicGuess=True,
-                flags=cv2.SOLVEPNP_SQPNP
-            )
+        # Refine with SQPNP (if available) or ITERATIVE and provide initial guess
+        # Prepare initial guesses: ensure they are lists of (3,1) float32 arrays
+        # rvec_guess = None
+        # tvec_guess = None
+        # use_guess = False
+        # if rvec_init is not None and tvec_init is not None:
+        #     try:
+        #         rvec_arr = np.asarray(rvec_init, dtype=np.float32).reshape(3, 1)
+        #         tvec_arr = np.asarray(tvec_init, dtype=np.float32).reshape(3, 1)
+        #         rvec_guess = [rvec_arr]
+        #         tvec_guess = [tvec_arr]
+        #         use_guess = True
+        #     except Exception:
+        #         rvec_guess = None
+        #         tvec_guess = None
+        #         use_guess = False
+
+        # # prefer SQPNP when available, else fall back to ITERATIVE
+        # # If we have an initial guess, prefer ITERATIVE to ensure solver uses it
+        # if use_guess:
+        #     method_flag = cv2.SOLVEPNP_ITERATIVE
+        # else:
+        #     method_flag = getattr(cv2, 'SOLVEPNP_SQPNP', cv2.SOLVEPNP_ITERATIVE)
+
+        # def reprojection_rmse(obj_pts, img_pts, rvec, tvec):
+        #     proj, _ = cv2.projectPoints(obj_pts, rvec, tvec, np.eye(3, dtype=np.float32), np.zeros((1, 5), dtype=np.float32))
+        #     proj = proj.reshape(-1, 2)
+        #     img = img_pts.reshape(-1, 2)
+        #     err = np.linalg.norm(proj - img, axis=1)
+        #     return float(np.sqrt(np.mean(err**2)))
+
+        # # Ensure we have points to solve
+        # if all_obj_pts.size == 0 or all_img_pts.size == 0:
+        #     return [], [], used_ids
+
+        # # Call solver; if it raises cv2.error when using guess, fall back to retry without guess
+        # try:
+        #     _, rvecs, tvecs, _ = cv2.solvePnPGeneric(
+        #         all_obj_pts,
+        #         all_img_pts,
+        #         np.eye(3, dtype=np.float32),
+        #         np.zeros((1, 5), dtype=np.float32),
+        #         rvecs=rvec_guess,
+        #         tvecs=tvec_guess,
+        #         useExtrinsicGuess=use_guess,
+        #         flags=method_flag
+        #     )
+        # except cv2.error as e:
+        #     # retry without guess
+        #     print(f"[warning] solvePnPGeneric failed with initial guess: {e}. Retrying without guess.")
+        #     _, rvecs, tvecs, _ = cv2.solvePnPGeneric(
+        #         all_obj_pts,
+        #         all_img_pts,
+        #         np.eye(3, dtype=np.float32),
+        #         np.zeros((1, 5), dtype=np.float32),
+        #         flags=getattr(cv2, 'SOLVEPNP_SQPNP', cv2.SOLVEPNP_ITERATIVE)
+        #     )
+
+        # # Diagnostic: reprojection RMSE with initial guess (if provided)
+        # if rvec_guess is not None and tvec_guess is not None:
+        #     try:
+        #         err_init = reprojection_rmse(all_obj_pts, all_img_pts, rvec_guess[0], tvec_guess[0])
+        #         print(f"[diagnostic] Reprojection RMSE using initial guess: {err_init:.4f} pixels")
+        #     except Exception:
+        #         print("[diagnostic] Could not compute reprojection error for initial guess")
         
-        # Check covariance of point distribution
-        self.check_point_variance(all_obj_pts)
-        # Get best solution, pointing towards camera
-        best_idx, max_forward = 0, -np.inf
-        for i, rvec_cand in enumerate(rvecs):
-            R_cand, _ = cv2.Rodrigues(rvec_cand)
-            forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
-            if forward_score < max_forward:
-                max_forward = forward_score
-                best_idx = i
-        rvecs = [rvecs[best_idx]]
-        tvecs = [tvecs[best_idx]]
+        # # Check covariance of point distribution
+        # self.check_point_variance(all_obj_pts)
+        # # Get best solution, pointing towards camera
+        # best_idx, max_forward = 0, -np.inf
+        # for i, rvec_cand in enumerate(rvecs):
+        #     R_cand, _ = cv2.Rodrigues(rvec_cand)
+        #     forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
+        #     # choose the solution with highest forward_score (more pointing to camera)
+        #     if forward_score > max_forward:
+        #         max_forward = forward_score
+        #         best_idx = i
+        # # Compute reprojection RMSE for the chosen best solution (diagnostic)
+        # try:
+        #     err_best = reprojection_rmse(all_obj_pts, all_img_pts, rvecs[best_idx], tvecs[best_idx])
+        #     print(f"[diagnostic] Reprojection RMSE of chosen solution: {err_best:.4f} pixels")
+        #     if rvec_guess is not None and tvec_guess is not None:
+        #         try:
+        #             print(f"[diagnostic] Improvement (init -> refined): {err_init - err_best:.4f} pixels")
+        #         except Exception:
+        #             pass
+        # except Exception:
+        #     pass
+
+        # # Further refine chosen solution with Levenberg-Marquardt (LM) for extra accuracy
+        # try:
+        #     rvec_chosen = np.asarray(rvecs[best_idx], dtype=np.float64).reshape(3, 1)
+        #     tvec_chosen = np.asarray(tvecs[best_idx], dtype=np.float64).reshape(3, 1)
+
+        #     # Use same camera matrix and zero distortion as earlier (points are undistorted)
+        #     try:
+        #         cv2.solvePnPRefineLM(all_obj_pts, all_img_pts, np.eye(3, dtype=np.float32), np.zeros((1, 5), dtype=np.float32), rvec_chosen, tvec_chosen)
+        #         err_lm = reprojection_rmse(all_obj_pts, all_img_pts, rvec_chosen, tvec_chosen)
+        #         print(f"[diagnostic] Reprojection RMSE after LM refine: {err_lm:.4f} pixels")
+        #         try:
+        #             print(f"[diagnostic] Improvement (refined -> LM): {err_best - err_lm:.4f} pixels")
+        #         except Exception:
+        #             pass
+        #     except cv2.error as e:
+        #         print(f"[warning] solvePnPRefineLM failed: {e}")
+
+        #     rvecs = [rvec_chosen]
+        #     tvecs = [tvec_chosen]
+        # except Exception:
+        #     # fallback to original chosen solution if LM fails
+        #     rvecs = [rvecs[best_idx]]
+        #     tvecs = [tvecs[best_idx]]
 
         # if rvec_init is not None and tvec_init is not None:
         #     print("Initial rvec:", rvec_init.flatten(), "tvec:", tvec_init.flatten())
@@ -507,6 +619,6 @@ if __name__ == "__main__":
 
     cam_params_file = "camera_params.npz"
     estimator = Estimator(cam_params_file)
-    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_3e_3e_3.csv"
+    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_2e_2e_2.csv"
     poses = estimator.get_poses(csv_file)
     estimator.save_computed_poses(poses, csv_file)

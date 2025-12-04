@@ -36,11 +36,12 @@ class DrawGraphs:
         except Exception:
             return None
 
-    def filter_df_by_pose(self, thresh=3.5, features=('tvec', 'rvec')):
-        """Return a filtered copy of self.data removing pose outliers.
+    def filter_df_by_pose_and_angle(self, thresh=3.5, features=('tvec', 'rvec')):
+        """Return a filtered copy of self.data removing pose and angle outliers.
 
         Strategy (robust): compute modified z-score using MAD for selected pose
-        features (tvec components, tvec norm, rvec components, rvec norm). A row
+        features (tvec components, tvec norm, rvec components, rvec norm) and
+        additionally the viewing angle of tvec relative to the XY plane. A row
         is removed when any feature's modified z-score exceeds `thresh`.
 
         Returns a DataFrame with only rows that have parseable `tvec` and `rvec`
@@ -74,8 +75,13 @@ class DrawGraphs:
         t_norm = np.linalg.norm(tvecs, axis=1)
         r_norm = np.linalg.norm(rvecs, axis=1)
 
+        # Add viewing angle (angle between tvec and its projection on XY plane)
+        xy_norm = np.linalg.norm(tvecs[:, :2], axis=1)
+        # angle = atan2(|z|, xy_norm) in radians (range [0, pi/2])
+        angles = np.arctan2(np.abs(tvecs[:, 2]), xy_norm)
+
         # Build feature matrix aligned with valid rows
-        feats = np.hstack([tvecs, t_norm.reshape(-1, 1), rvecs, r_norm.reshape(-1, 1)])
+        feats = np.hstack([tvecs, t_norm.reshape(-1, 1), rvecs, r_norm.reshape(-1, 1), angles.reshape(-1, 1)])
 
         # Robust modified z-score per column (using MAD)
         medians = np.median(feats, axis=0)
@@ -98,8 +104,6 @@ class DrawGraphs:
 
         # Build final boolean keep mask aligned with df.index
         keep_mask = np.zeros(len(df), dtype=bool)
-        valid_rows = [i for i, v in enumerate(parsed_t) if v is not None]
-        # valid_rows maps positions in parsed lists to positions in feats (and outlier_mask)
         feat_idx = 0
         for pos, parsed in enumerate(parsed_t):
             if parsed is None:
@@ -115,7 +119,7 @@ class DrawGraphs:
         # Plot real and estimates poses in 3D grid (only points)
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
-        df = self.filter_df_by_pose() if filter_outliers else self.data
+        df = self.filter_df_by_pose_and_angle() if filter_outliers else self.data
 
         for index, row in df.iterrows():
             # Real poses
@@ -170,7 +174,7 @@ class DrawGraphs:
         dists = []
         deltas = []
 
-        df = self.filter_df_by_pose()  # por padrão aplica o filtro robusto
+        df = self.filter_df_by_pose_and_angle()  # por padrão aplica o filtro robusto
 
         for idx, row in df.iterrows():
             # somente entradas com detecção válida
@@ -231,7 +235,7 @@ class DrawGraphs:
     def plot_translation_errors_distance_bins(self):
         distances = []
         errors = []
-        df = self.filter_df_by_pose()
+        df = self.filter_df_by_pose_and_angle()
 
         for index, row in df.iterrows():
             if pd.notna(row.get('tvec')) and pd.notna(row.get('tvec_est')):
@@ -266,7 +270,7 @@ class DrawGraphs:
     def plot_rotation_errors_distance_bins(self):
         distances = []
         errors = []
-        df = self.filter_df_by_pose()
+        df = self.filter_df_by_pose_and_angle()
 
         for index, row in df.iterrows():
             if pd.notna(row.get('rvec')) and pd.notna(row.get('rvec_est')) and pd.notna(row.get('tvec')):
@@ -308,7 +312,7 @@ class DrawGraphs:
         total_counts = np.zeros(len(bins) - 1)
         valid_counts = np.zeros(len(bins) - 1)
 
-        df = self.filter_df_by_pose()
+        df = self.filter_df_by_pose_and_angle()
 
         for index, row in df.iterrows():
             if pd.notna(row.get('tvec')):
@@ -339,7 +343,7 @@ class DrawGraphs:
         total_counts = np.zeros(len(bins) - 1)
         valid_counts = np.zeros(len(bins) - 1)
 
-        df = self.filter_df_by_pose()
+        df = self.filter_df_by_pose_and_angle()
 
         for index, row in df.iterrows():
             if pd.notna(row.get('tvec')):
@@ -480,7 +484,7 @@ class DrawGraphs:
         distances = []
         errors = []
 
-        df = self.filter_df_by_pose()
+        df = self.filter_df_by_pose_and_angle()
 
         for index, row in df.iterrows():
             if pd.notna(row.get('tvec')) and pd.notna(row.get('tvec_est')):
@@ -515,7 +519,7 @@ class DrawGraphs:
         distances = []
         errors = []
 
-        df = self.filter_df_by_pose()
+        df = self.filter_df_by_pose_and_angle()
 
         for index, row in df.iterrows():
             if pd.notna(row.get('tvec')) and pd.notna(row.get('tvec_est')):
@@ -549,10 +553,10 @@ class DrawGraphs:
 
 if __name__ == "__main__":
     # Example usage
-    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_3e_3e_3_with_poses.csv"
+    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_2e_2e_2_with_poses.csv"
     graph_drawer = DrawGraphs(csv_file)
     
-    # graph_drawer.plot_3d_poses()
+    graph_drawer.plot_3d_poses()
     graph_drawer.print_data_summary()
     graph_drawer.plot_distance_difference_with_trend(abs_diff=True, show_r2=True)
     graph_drawer.plot_translation_errors_distance_bins()
@@ -562,5 +566,5 @@ if __name__ == "__main__":
     graph_drawer.xy_translation_mean_error_bins()
     graph_drawer.z_translation_mean_error_bins()
 
-    # for i in range(len(graph_drawer.data)):
-    #     graph_drawer.plot_rvec_comparison(i)
+    for i in range(len(graph_drawer.data)):
+        graph_drawer.plot_rvec_comparison(i)
