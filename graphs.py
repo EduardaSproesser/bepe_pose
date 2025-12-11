@@ -68,24 +68,42 @@ class DrawGraphs:
         if len(valid_idx) == 0:
             return df.iloc[[]]  # empty
 
+        # ... (código anterior) ...
+
         tvecs = np.vstack([parsed_t[i] for i in range(len(parsed_t)) if parsed_t[i] is not None])
         rvecs = np.vstack([parsed_r[i] for i in range(len(parsed_r)) if parsed_r[i] is not None])
-
-        # features to evaluate: tvec x,y,z and t_norm; rvec x,y,z and r_norm
+        
+        # --- Cálculo de Features de Pose (Continuação) ---
         t_norm = np.linalg.norm(tvecs, axis=1)
         r_norm = np.linalg.norm(rvecs, axis=1)
 
-        # Add viewing angle (angle between tvec and its projection on XY plane)
+        # Adicionar viewing angle (angle between tvec and its projection on XY plane)
         xy_norm = np.linalg.norm(tvecs[:, :2], axis=1)
-        # angle = atan2(|z|, xy_norm) in radians (range [0, pi/2])
         angles = np.arctan2(np.abs(tvecs[:, 2]), xy_norm)
 
+        # --------------------------------------------------------------------------
+        # NOVO: Adicionar uma feature de Rotação para detectar os 'flips' 180-degree
+        # Vamos usar a variação do ângulo de rotação (magnitude do rvec)
+        # --------------------------------------------------------------------------
+        
+        # O método MAD é bom, mas é mais vulnerável para rvecs, que são cíclicos.
+        # Continuaremos usando rvecs, r_norm e tvecs, t_norm, e angles
+        
         # Build feature matrix aligned with valid rows
-        feats = np.hstack([tvecs, t_norm.reshape(-1, 1), rvecs, r_norm.reshape(-1, 1), angles.reshape(-1, 1)])
+        # Removemos r_norm por enquanto, pois é menos informativo para flips
+        feats = np.hstack([tvecs, t_norm.reshape(-1, 1), rvecs, angles.reshape(-1, 1)]) # 3 T, 1 T_norm, 3 R, 1 Angle = 8 features
+        
+        # --------------------------------------------------------------------------
+        # O resto do filtro (MAD Z-score) permanece
+        # --------------------------------------------------------------------------
 
         # Robust modified z-score per column (using MAD)
         medians = np.median(feats, axis=0)
         mad = np.median(np.abs(feats - medians), axis=0)
+
+        # ... (código para calcular modified_z) ...
+        # ... (código para calcular outlier_mask_valid_rows) ...
+        # ... (código para retornar df[keep_mask]) ...
 
         # Avoid division by zero: fallback to std if mad == 0, else fall back to no-scaling
         stds = np.std(feats, axis=0)
@@ -279,31 +297,47 @@ class DrawGraphs:
                 tvec = self._parse_vec(row.get('tvec'))
                 if rvec is None or rvec_est is None or tvec is None:
                     continue
+                
                 distance = np.linalg.norm(tvec)
-                # Rotation error as angle between vectors
-                rvec_n = rvec / np.linalg.norm(rvec)
-                rvec_est_n = rvec_est / np.linalg.norm(rvec_est)
-                error = np.arccos(np.clip(np.dot(rvec_n, rvec_est_n), -1.0, 1.0))
+                
+                # --- NOVO CÁLCULO DE ERRO DE ROTAÇÃO (ROBUSTO) ---
+                # 1. Converter rvecs para Matrizes de Rotação (R)
+                R_real, _ = cv2.Rodrigues(rvec.reshape(3, 1))
+                R_est, _ = cv2.Rodrigues(rvec_est.reshape(3, 1))
+                
+                # 2. Calcular a Matriz de Rotação de Diferença: R_diff = R_real.T @ R_est
+                R_diff = R_real.T @ R_est
+                
+                # 3. Calcular o ângulo de rotação (erro) a partir do R_diff (fórmula do Ângulo-Eixo)
+                trace = np.trace(R_diff)
+                
+                # np.clip previne erros de ponto flutuante fora da faixa [-1, 1]
+                cos_angle = np.clip((trace - 1.0) / 2.0, -1.0, 1.0)
+                error = np.arccos(cos_angle)
+                
+                # --- FIM DO NOVO CÁLCULO ---
+                # Change to degrees
                 distances.append(distance)
+                error = np.rad2deg(error)
                 errors.append(error)
-
+        
+        # Agrupar por bins de distância
         bins = self.distance_bins
         bin_centers = (bins[:-1] + bins[1:]) / 2
         mean_errors = []
-
         for i in range(len(bins) - 1):
             in_bin = [(d, e) for d, e in zip(distances, errors) if bins[i] <= d < bins[i + 1]]
             if len(in_bin) > 0:
                 mean_errors.append(np.mean([e for _, e in in_bin]))
             else:
                 mean_errors.append(np.nan)
-
-        plt.bar(bin_centers, np.rad2deg(mean_errors), width=(self.distance_bins[1] - self.distance_bins[0]) * 0.9, color='salmon', edgecolor='black')
+        plt.bar(bin_centers, mean_errors, width=(self.distance_bins[1] - self.distance_bins[0]) * 0.9, color='coral', edgecolor='black')
         plt.xlabel('Distance to Origin (units)')
         plt.ylabel('Mean Rotation Error (degrees)')
         plt.title('Rotation Error vs Distance')
         plt.grid(axis='y', linestyle='--', alpha=0.7)
         plt.show()
+        # ... (Restante do código da função plot_rotation_errors_distance_bins)
 
     def detection_rate_distance_bins(self):
         bins = self.distance_bins
@@ -384,57 +418,42 @@ class DrawGraphs:
         rotation_errors = []
 
         for index, row in self.data.iterrows():
+            # ... (Cálculo de translation_errors - OMITIDO, pois está correto) ...
             if pd.notna(row['tvec']) and pd.notna(row['tvec_est']):
-                tvec = np.array([float(val) for val in row['tvec'].split(',')])
-                tvec_est = np.array([float(val) for val in row['tvec_est'].split(',')])
-                translation_errors.append(np.linalg.norm(tvec - tvec_est))
+                tvec = self._parse_vec(row.get('tvec'))
+                tvec_est = self._parse_vec(row.get('tvec_est'))
+                if tvec is not None and tvec_est is not None:
+                    translation_errors.append(np.linalg.norm(tvec - tvec_est))
 
             if pd.notna(row['rvec']) and pd.notna(row['rvec_est']):
-                rvec = np.array([float(val) for val in row['rvec'].split(',')])
-                rvec_est = np.array([float(val) for val in row['rvec_est'].split(',')])
-                rvec_n = rvec / np.linalg.norm(rvec)
-                rvec_est_n = rvec_est / np.linalg.norm(rvec_est)
-                rotation_errors.append(np.arccos(np.clip(np.dot(rvec_n, rvec_est_n), -1.0, 1.0)))
+                rvec = self._parse_vec(row.get('rvec'))
+                rvec_est = self._parse_vec(row.get('rvec_est'))
+                if rvec is None or rvec_est is None:
+                    continue
+                
+                # --- NOVO CÁLCULO DE ERRO DE ROTAÇÃO (ROBUSTO) ---
+                # 1. Converter rvecs para Matrizes de Rotação (R)
+                R_real, _ = cv2.Rodrigues(rvec.reshape(3, 1))
+                R_est, _ = cv2.Rodrigues(rvec_est.reshape(3, 1))
+                
+                # 2. Calcular a Matriz de Rotação de Diferença: R_diff = R_real.T @ R_est
+                R_diff = R_real.T @ R_est
+                
+                # 3. Calcular o ângulo de rotação (erro) a partir do R_diff
+                trace = np.trace(R_diff)
+                cos_angle = np.clip((trace - 1.0) / 2.0, -1.0, 1.0)
+                angle_rad = np.arccos(cos_angle)
+                
+                rotation_errors.append(angle_rad)
+                # --- FIM DO NOVO CÁLCULO ---
 
         print(f"Total Entries: {total_entries}")
         print(f"Valid Detections: {valid_detections}")
-        if translation_errors:
-            print(f"Mean Translation Error: {np.mean(translation_errors):.4f} units")
-            print(f"Median Translation Error: {np.median(translation_errors):.4f} units")
-        if rotation_errors:
-            print(f"Mean Rotation Error: {np.degrees(np.mean(rotation_errors)):.4f} degrees")
-            print(f"Median Rotation Error: {np.degrees(np.median(rotation_errors)):.4f} degrees")
-
-        # Print list with all angles x, y, z
-        angles_x_real = []
-        angles_y_real = []
-        angles_z_real = []
-        angles_x_est = []
-        angles_y_est = []
-        angles_z_est = []
-        # Print angles to compare in list form
-        # for index, row in self.data.iterrows():
-        #     if pd.notna(row['rvec']) and pd.notna(row['rvec_est']):
-        #         rvec = np.array([float(val) for val in row['rvec'].split(',')])
-        #         rvec_est = np.array([float(val) for val in row['rvec_est'].split(',')])
-        #         # Convert rotation vectors to rotation matrices
-        #         R_real, _ = cv2.Rodrigues(rvec)
-        #         R_est, _ = cv2.Rodrigues(rvec_est)
-        #         # Extract Euler angles (in radians)
-        #         angles_real = cv2.decomposeProjectionMatrix(np.hstack((R_real, np.zeros((3, 1)))))[6]
-        #         angles_est = cv2.decomposeProjectionMatrix(np.hstack((R_est, np.zeros((3, 1)))))[6]
-        #         angles_x_real.append(angles_real[0][0])
-        #         angles_y_real.append(angles_real[1][0])
-        #         angles_z_real.append(angles_real[2][0])
-        #         angles_x_est.append(angles_est[0][0])
-        #         angles_y_est.append(angles_est[1][0])
-        #         angles_z_est.append(angles_est[2][0])
-        # print("Real Angles X (radians):", angles_x_real)
-        # print("Estimated Angles X (radians):", angles_x_est)
-        # print("Real Angles Y (radians):", angles_y_real)
-        # print("Estimated Angles Y (radians):", angles_y_est)
-        # print("Real Angles Z (radians):", angles_z_real)
-        # print("Estimated Angles Z (radians):", angles_z_est)
+        print(f"Translation Error - Mean: {np.mean(translation_errors):.4f}, Std: {np.std(translation_errors):.4f}")
+        print(f"Translation Error - Median: {np.median(translation_errors):.4f}, 90th Percentile: {np.percentile(translation_errors, 90):.4f}")
+        print(f"Rotation Error (deg) - Mean: {np.mean(np.degrees(rotation_errors)):.4f}, Std: {np.std(np.degrees(rotation_errors)):.4f}")
+        print(f"Rotation Error (deg) - Median: {np.median(np.degrees(rotation_errors)):.4f}, 90th Percentile: {np.percentile(np.degrees(rotation_errors), 90):.4f}")
+        # ... (Restante da impressão de resultados) ...
     
     def plot_rvec_comparison(self, index):
         """

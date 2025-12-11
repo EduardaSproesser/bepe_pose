@@ -149,8 +149,8 @@ class Estimator:
     def check_point_variance(self, all_obj_pts):
         cov = np.cov(all_obj_pts.T)
         eigvals = np.linalg.eigvalsh(cov)
-        # print("Object points covariance eigenvalues:", eigvals)
-        # print("Condition (max/min):", float(eigvals.max()/max(eigvals.min(), 1e-12)))
+        print("Object points covariance eigenvalues:", eigvals)
+        print("Condition (max/min):", float(eigvals.max()/max(eigvals.min(), 1e-12)))
         return eigvals
 
 
@@ -351,6 +351,187 @@ class Estimator:
         return corrected_rvec, corrected_tvec
 
 
+    def estimate_pose_multi_iterative(self, corners_list, ids_list, marker_type):
+
+        # Define marker size (mm)
+        marker_size_dict = {"1p": 8.2, "2e": 5.3, "3e": 4.35, "2v": 4.2, "3v": 4.2}
+        marker_size = marker_size_dict.get(marker_type)
+
+        match marker_type:
+            case "2e":
+                marker_points_dict = {
+                    1: np.array([  # first marker
+                        [-2.65, 7.976, 3.721],
+                        [2.65, 7.976, 3.721],
+                        [2.65, 2.857, 5.092],
+                        [-2.65, 2.857, 5.092]
+                    ], dtype=np.float32),
+
+                    0: np.array([  # second marker
+                        [-2.65, -2.857, 5.092],
+                        [2.65, -2.857, 5.092],
+                        [2.65, -7.976, 3.721],
+                        [-2.65, -7.976, 3.721]
+                    ], dtype=np.float32)
+                }
+            
+            case "3e":
+                marker_points_dict = {
+                    2: np.array([
+                        [4.623, 2.165, 4.619],
+                        [8.806, 2.165, 3.498],
+                        [8.806, -2.165, 3.498],
+                        [4.623, -2.165, 4.619]
+                    ], dtype=np.float32),
+                    3: np.array([
+                        [-6.264, 6.54, 3.501],
+                        [-2.515, 8.705, 3.501],
+                        [-0.423, 5.083, 4.622],
+                        [-4.173, 2.918, 4.622]
+                    ], dtype=np.float32),
+                    4: np.array([
+                        [-4.187, -2.922, 4.619],
+                        [-0.437, -5.087, 4.619],
+                        [-2.528, -8.709, 3.498],
+                        [-6.278, -6.544, 3.498]
+                    ], dtype=np.float32)
+                }
+            
+            case "2v":
+                marker_points_dict = {
+                    6: np.array([
+                        [ -2.973, 5.935, 4.268],
+                        [ 0.00, 8.807, 3.498],
+                        [ 2.973, 5.935, 4.268],
+                        [ 0.00, 3.063, 5.037]
+                    ], dtype=np.float32),
+                    7: np.array([
+                        [-2.973, -5.935, 4.268],
+                        [0.00, -3.063, 5.037],
+                        [2.973, -5.935, 4.268],
+                        [0.00, -8.807, 3.498]
+                    ], dtype=np.float32)
+                }
+            
+            case "3v":
+                marker_points_dict = {
+                    9: np.array([
+                        [-4.403, 7.627, 3.498],
+                        [-0.392, 6.626, 4.268],
+                        [-1.531, 2.652, 5.037],
+                        [-5.542, 3.653, 4.268]
+                    ], dtype=np.float32),
+                    10: np.array([
+                        [ -5.539, -3.666, 4.265],
+                        [-1.528, -2.665, 5.035],
+                        [-0.389, -6.639, 4.265],
+                        [-4.40, -7.64, 3.496]
+                    ], dtype=np.float32),
+                    8: np.array([
+                        [3.063, 0.00, 5.037],
+                        [5.935, 2.973, 4.268],
+                        [8.807, 0.00, 3.498],
+                        [5.935, -2.973, 4.268]
+                    ], dtype=np.float32)
+                }
+
+            case _:
+                raise ValueError("Unknown marker type")
+        """Estimate pose for multiple marker detections."""
+
+        all_obj_pts = []
+        all_img_pts = []
+        rvecs_initial = []
+        tvecs_initial = []
+        used_ids = [] 
+
+        # To all ided markers, collect their corners and corresponding 3D points
+        for corners, id in zip(corners_list, ids_list):
+            id = int(id)
+            # Get initial pose estimate for each marker using estimate_pose_single_raw
+            try:
+                # Do this for each id, 8 corners
+                rvec_init, tvec_init = self.estimate_pose_single(corners, id, marker_size)
+                rvecs_initial.append(rvec_init)
+                tvecs_initial.append(tvec_init)
+            except Exception:
+                pass
+            if id in marker_points_dict:
+                obj_pts = marker_points_dict[id]
+                img_pts = np.array(corners, dtype=np.float32).reshape(4, 2)
+
+                all_obj_pts.append(obj_pts)
+                all_img_pts.append(img_pts)
+                used_ids.append(id)
+
+        # Create a SINGLE initial estimate using estimate pose single mean
+        rvec_init = np.mean(np.array(rvecs_initial), axis=0)
+        tvec_init = np.mean(np.array(tvecs_initial), axis=0)
+
+        # Check we have points
+        if not all_obj_pts or not all_img_pts:
+            print("[AVISO] Nenhum marcador válido encontrado neste frame para estimativa multi.")
+            return [], [], used_ids
+
+        # Stack all points
+        all_obj_pts = np.vstack(all_obj_pts).astype(np.float32)
+        all_img_pts = np.vstack(all_img_pts).astype(np.float32)
+        
+        # self.check_point_variance(all_obj_pts)
+
+        # self.check_order(all_obj_pts, all_img_pts, used_ids)
+
+        # 2. Execução do SOLVEPNP_ITERATIVE
+        if rvec_init is not None and tvec_init is not None:
+            # Usa o chute do IPPE para o Iterative Solver
+            rvec_multi = rvec_init.copy()
+            tvec_multi = tvec_init.copy()
+            use_guess = True
+        else:
+            # Se não encontrou o ID 0 (chute), usa uma estimativa inicial padrão (EPNP)
+            rvec_multi = None
+            tvec_multi = None
+            use_guess = False
+            print("[AVISO] Chute inicial não encontrado. Usando EPNP como inicializador.")
+        
+        # O PnP Iterative ou EPNP/Default PnP
+        retval, rvec_multi, tvec_multi = cv2.solvePnP(
+            all_obj_pts, 
+            all_img_pts, 
+            np.eye(3, dtype=np.float32),
+            np.zeros((1, 5), dtype=np.float32),
+            rvec=rvec_multi if use_guess else None, 
+            tvec=tvec_multi if use_guess else None,
+            useExtrinsicGuess=use_guess, 
+            flags=cv2.SOLVEPNP_ITERATIVE # Tenta o Iterative para aproveitar o guess, ou usa para otimização
+        )
+        
+        if not retval:
+            print("[ERRO] solvePnP_Iterative falhou.")
+            return [], [], used_ids
+
+        # NOVO BLOCO DE PREPARAÇÃO PARA REFINAMENTO ---
+        # Garante que os vetores de pose estejam no formato e tipo de dados corretos.
+        # O solvePnP pode retornar (3, 1) ou (3,) dependendo da versão/flag. 
+        # solvePnPRefineLM prefere (3, 1) e np.float64 para otimização.
+        
+        rvec_refined = rvec_multi.copy().reshape(3, 1).astype(np.float64)
+        tvec_refined = tvec_multi.copy().reshape(3, 1).astype(np.float64)
+        # 3. Refinamento Levenberg-Marquardt (LM)
+        try:
+            rvec_multi, tvec_multi = cv2.solvePnPRefineLM(
+                all_obj_pts, 
+                all_img_pts, 
+                np.eye(3, dtype=np.float32),
+                np.zeros((1, 5), dtype=np.float32),
+                rvec_refined, 
+                tvec_refined, 
+            )
+        except Exception as e:
+            print(f"[AVISO] solvePnPRefineLM falhou. Usando resultado do Iterative. Erro: {e}")
+
+        return rvec_multi, tvec_multi, used_ids
+    
     def estimate_pose_multi(self, corners_list, ids_list, marker_type):
 
         # Define marker size (mm)
@@ -464,155 +645,21 @@ class Estimator:
                 all_img_pts.append(img_pts)
                 used_ids.append(id)
 
-        ## Create a SINGLE initial estimate using estimate pose single
-        # if len(rvecs_initial) > 0:
-        #     # get one initial estimate
-        #     rvec_init = rvecs_initial[0]
-        #     tvec_init = tvecs_initial[0]
-        # else:
-        #     rvec_init = None
-        #     tvec_init = None
+        # Create a SINGLE initial estimate using estimate pose single mean
+        rvec_init = np.mean(np.array(rvecs_initial), axis=0)
+        tvec_init = np.mean(np.array(tvecs_initial), axis=0)
 
-        # all_obj_pts = np.vstack(all_obj_pts).astype(np.float32)
-        # all_img_pts = np.vstack(all_img_pts).astype(np.float32)
+        # Check we have points
+        if not all_obj_pts or not all_img_pts:
+            print("[AVISO] Nenhum marcador válido encontrado neste frame para estimativa multi.")
+            return [], [], used_ids
 
-        # Simple solution!!!
-        rvecs, tvecs = [], []
-        # rvec, tvecs = single estimate mean
-        rvecs = [np.mean(np.array(rvecs_initial), axis=0)] if len(rvecs_initial) > 0 else []
-        tvecs = [np.mean(np.array(tvecs_initial), axis=0)] if len(tvecs_initial) > 0 else []
+        # Stack all points
+        all_obj_pts = np.vstack(all_obj_pts).astype(np.float32)
+        all_img_pts = np.vstack(all_img_pts).astype(np.float32)
         
-        # self.check_point_variance(all_obj_pts)
-
-        # self.check_order(all_obj_pts, all_img_pts, used_ids)
-
-        # Refine with SQPNP (if available) or ITERATIVE and provide initial guess
-        # Prepare initial guesses: ensure they are lists of (3,1) float32 arrays
-        # rvec_guess = None
-        # tvec_guess = None
-        # use_guess = False
-        # if rvec_init is not None and tvec_init is not None:
-        #     try:
-        #         rvec_arr = np.asarray(rvec_init, dtype=np.float32).reshape(3, 1)
-        #         tvec_arr = np.asarray(tvec_init, dtype=np.float32).reshape(3, 1)
-        #         rvec_guess = [rvec_arr]
-        #         tvec_guess = [tvec_arr]
-        #         use_guess = True
-        #     except Exception:
-        #         rvec_guess = None
-        #         tvec_guess = None
-        #         use_guess = False
-
-        # # prefer SQPNP when available, else fall back to ITERATIVE
-        # # If we have an initial guess, prefer ITERATIVE to ensure solver uses it
-        # if use_guess:
-        #     method_flag = cv2.SOLVEPNP_ITERATIVE
-        # else:
-        #     method_flag = getattr(cv2, 'SOLVEPNP_SQPNP', cv2.SOLVEPNP_ITERATIVE)
-
-        # def reprojection_rmse(obj_pts, img_pts, rvec, tvec):
-        #     proj, _ = cv2.projectPoints(obj_pts, rvec, tvec, np.eye(3, dtype=np.float32), np.zeros((1, 5), dtype=np.float32))
-        #     proj = proj.reshape(-1, 2)
-        #     img = img_pts.reshape(-1, 2)
-        #     err = np.linalg.norm(proj - img, axis=1)
-        #     return float(np.sqrt(np.mean(err**2)))
-
-        # # Ensure we have points to solve
-        # if all_obj_pts.size == 0 or all_img_pts.size == 0:
-        #     return [], [], used_ids
-
-        # # Call solver; if it raises cv2.error when using guess, fall back to retry without guess
-        # try:
-        #     _, rvecs, tvecs, _ = cv2.solvePnPGeneric(
-        #         all_obj_pts,
-        #         all_img_pts,
-        #         np.eye(3, dtype=np.float32),
-        #         np.zeros((1, 5), dtype=np.float32),
-        #         rvecs=rvec_guess,
-        #         tvecs=tvec_guess,
-        #         useExtrinsicGuess=use_guess,
-        #         flags=method_flag
-        #     )
-        # except cv2.error as e:
-        #     # retry without guess
-        #     print(f"[warning] solvePnPGeneric failed with initial guess: {e}. Retrying without guess.")
-        #     _, rvecs, tvecs, _ = cv2.solvePnPGeneric(
-        #         all_obj_pts,
-        #         all_img_pts,
-        #         np.eye(3, dtype=np.float32),
-        #         np.zeros((1, 5), dtype=np.float32),
-        #         flags=getattr(cv2, 'SOLVEPNP_SQPNP', cv2.SOLVEPNP_ITERATIVE)
-        #     )
-
-        # # Diagnostic: reprojection RMSE with initial guess (if provided)
-        # if rvec_guess is not None and tvec_guess is not None:
-        #     try:
-        #         err_init = reprojection_rmse(all_obj_pts, all_img_pts, rvec_guess[0], tvec_guess[0])
-        #         print(f"[diagnostic] Reprojection RMSE using initial guess: {err_init:.4f} pixels")
-        #     except Exception:
-        #         print("[diagnostic] Could not compute reprojection error for initial guess")
-        
-        # # Check covariance of point distribution
-        # self.check_point_variance(all_obj_pts)
-        # # Get best solution, pointing towards camera
-        # best_idx, max_forward = 0, -np.inf
-        # for i, rvec_cand in enumerate(rvecs):
-        #     R_cand, _ = cv2.Rodrigues(rvec_cand)
-        #     forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
-        #     # choose the solution with highest forward_score (more pointing to camera)
-        #     if forward_score > max_forward:
-        #         max_forward = forward_score
-        #         best_idx = i
-        # # Compute reprojection RMSE for the chosen best solution (diagnostic)
-        # try:
-        #     err_best = reprojection_rmse(all_obj_pts, all_img_pts, rvecs[best_idx], tvecs[best_idx])
-        #     print(f"[diagnostic] Reprojection RMSE of chosen solution: {err_best:.4f} pixels")
-        #     if rvec_guess is not None and tvec_guess is not None:
-        #         try:
-        #             print(f"[diagnostic] Improvement (init -> refined): {err_init - err_best:.4f} pixels")
-        #         except Exception:
-        #             pass
-        # except Exception:
-        #     pass
-
-        # # Further refine chosen solution with Levenberg-Marquardt (LM) for extra accuracy
-        # try:
-        #     rvec_chosen = np.asarray(rvecs[best_idx], dtype=np.float64).reshape(3, 1)
-        #     tvec_chosen = np.asarray(tvecs[best_idx], dtype=np.float64).reshape(3, 1)
-
-        #     # Use same camera matrix and zero distortion as earlier (points are undistorted)
-        #     try:
-        #         cv2.solvePnPRefineLM(all_obj_pts, all_img_pts, np.eye(3, dtype=np.float32), np.zeros((1, 5), dtype=np.float32), rvec_chosen, tvec_chosen)
-        #         err_lm = reprojection_rmse(all_obj_pts, all_img_pts, rvec_chosen, tvec_chosen)
-        #         print(f"[diagnostic] Reprojection RMSE after LM refine: {err_lm:.4f} pixels")
-        #         try:
-        #             print(f"[diagnostic] Improvement (refined -> LM): {err_best - err_lm:.4f} pixels")
-        #         except Exception:
-        #             pass
-        #     except cv2.error as e:
-        #         print(f"[warning] solvePnPRefineLM failed: {e}")
-
-        #     rvecs = [rvec_chosen]
-        #     tvecs = [tvec_chosen]
-        # except Exception:
-        #     # fallback to original chosen solution if LM fails
-        #     rvecs = [rvecs[best_idx]]
-        #     tvecs = [tvecs[best_idx]]
-
-        # if rvec_init is not None and tvec_init is not None:
-        #     print("Initial rvec:", rvec_init.flatten(), "tvec:", tvec_init.flatten())
-        #     print(f"Refined rvec: {rvecs[0].flatten()}, tvec: {tvecs[0].flatten()}")
-
-        # proj, _ = cv2.projectPoints(all_obj_pts, rvecs, tvecs, np.eye(3, dtype=np.float32), np.zeros((1, 5), dtype=np.float32))
-
-        # plt.figure(figsize=(6,6))
-        # plt.scatter(all_obj_pts[:,0], all_obj_pts[:,1], label="3D points")
-        # plt.scatter(proj[:,0,0], proj[:,0,1], label="Projected points")
-        # plt.legend()
-        # plt.title("Projection check")
-        # plt.show()
-
-        return rvecs, tvecs, used_ids
+    
+        return rvec_init, tvec_init, used_ids
     
 if __name__ == "__main__":
     # Example usage
