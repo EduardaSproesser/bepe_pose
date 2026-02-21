@@ -5,9 +5,11 @@ import numpy as np
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
+from itertools import product
 
 class Estimator:
-    def __init__(self, cam_params_file, dict_type=cv2.aruco.DICT_4X4_50):
+    def __init__(self, cam_params_file, estimation_type, dict_type=cv2.aruco.DICT_4X4_50):
+        self.estimation_type = estimation_type
         # --- Load camera parameters ---
         if isinstance(cam_params_file, str):
             loaded = np.load(cam_params_file)
@@ -122,11 +124,13 @@ class Estimator:
         # Estimate pose for each image
         poses = []
         for nv, c, i in zip(n_valid, corners, ids):
+            # print(f"Estimating pose for image with {nv} valid markers.")
             if nv == 1:
                 # Try to estimate single marker pose if corners/ids available
-                if len(c) > 0 and len(i) > 0:
+                if len(c) > 0 and len(i) > 0 and i[0]==3:
                     try:
                     # rvec, tvec = self.estimate_pose_single_raw(c[0], marker_size)
+                        # print(f"[INFO] Estimating single-marker pose for ID {i[0]}.")
                         rvec, tvec = self.estimate_pose_single(c[0], i[0], marker_size)
                         poses.append({'rvec': rvec, 'tvec': tvec / 0.69, 'ids': [int(i[0]) if not isinstance(i[0], (list, np.ndarray)) else int(i[0][0]) ]})
                     except Exception:
@@ -134,13 +138,15 @@ class Estimator:
                 else:
                     poses.append({'rvec': None, 'tvec': None, 'ids': []})
             elif nv > 1:
-                rvecs, tvecs, used_ids = self.estimate_pose_multi(c, i, marker_type)
-                # Divide tvec by 0.69, considering it's a list
-                tvecs = [tvec / 0.69 for tvec in tvecs]
-                if rvecs is None or len(rvecs) == 0:
-                    poses.append({'rvec': None, 'tvec': None, 'ids': []})
-                else:
+                # print(f"[INFO] Estimating multi-marker pose for {nv} markers.")
+                try:
+                    rvecs, tvecs, used_ids = getattr(self, f"estimate_pose_{self.estimation_type}")(c, i, marker_type)
+                    print(f"[INFO] Estimated multi-marker pose with {len(used_ids)} markers.")
+                    # Divide tvec by 0.69, considering it's a list
+                    tvecs = [tvec / 0.69 for tvec in tvecs]
                     poses.append({'rvec': rvecs, 'tvec': tvecs, 'ids': used_ids})
+                except Exception:
+                    poses.append({'rvec': None, 'tvec': None, 'ids': []})
             else:
                 poses.append({'rvec': None, 'tvec': None, 'ids': []})
 
@@ -193,15 +199,9 @@ class Estimator:
 
         # Save to new CSV
         base, ext = os.path.splitext(output_csv)
-        new_csv_file = f"{base}_with_poses{ext}"
+        new_csv_file = f"{base}_with_poses_{self.estimation_type}{ext}"
         data.to_csv(new_csv_file, sep=';', index=False)
         print(f"Saved computed poses to {new_csv_file}")
-
-    def check_order(self, obj_pts, img_pts, id):
-        # print(f"\nMarker ID {id}")
-        # for i in range(8):
-        #     print(f"Corner {i} in 2D  corresponds to 3D point: {obj_pts[i]}")
-        pass
     
     def estimate_pose_single_raw(self, corners, marker_size):
         """Estimate pose for a single marker detection."""
@@ -221,60 +221,22 @@ class Estimator:
             np.zeros((1, 5), dtype=np.float32),
             flags=cv2.SOLVEPNP_IPPE_SQUARE
         )
-
-        # Select solution pointing towards camera
-        best_idx, max_forward = 0, -np.inf
-        for i, rvec_cand in enumerate(rvecs):
-            R_cand, _ = cv2.Rodrigues(rvec_cand)
-            forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
-            if forward_score > max_forward:
-                max_forward = forward_score
-                best_idx = i
-
-        # rvec/tvec
-        rvecs = rvecs[best_idx]
-        tvecs = tvecs[best_idx].reshape(3, 1)
-
+        
         return rvecs, tvecs
-    
-    def estimate_pose_single(self, corners, id, marker_size):
-        """Estimate pose for a single marker detection."""
-        # Define 3D object points for the marker corners in marker frame (MF)
-        obj_points = np.array([
-            [-marker_size/2,  marker_size/2, 0],
-            [ marker_size/2,  marker_size/2, 0],
-            [ marker_size/2, -marker_size/2, 0],
-            [-marker_size/2, -marker_size/2, 0]
-        ], dtype=np.float32)
-        # Solve PnP using IPPE_SQUARE method
-        _, rvecs, tvecs, _ = cv2.solvePnPGeneric(
-            obj_points, 
-            np.array(corners, dtype=np.float32).reshape(1, 4, 2), 
-            np.eye(3, dtype=np.float32),
-            np.zeros((1, 5), dtype=np.float32),
-            flags=cv2.SOLVEPNP_IPPE_SQUARE
-        )
+        
+    def _transform_and_correct_pose(self, rvec_smf, tvec_smf, marker_id):
+        """
+        Transforms the pose estimated in the Marker Frame (MF) to the Sensor/System Frame (SMF)
+        and then to the Camera Frame (CF). This resolves the ambiguity from PnP.
+        
+        Args:
+            rvec_smf (np.array): Rotation vector (CF -> SMF) from solvePnP.
+            tvec_smf (np.array): Translation vector (CF -> SMF) from solvePnP.
+            marker_id (int): ID of the marker to look up the T_mf_smf transformation.
 
-        # Select solution pointing towards camera, arrow point towards negative z
-        best_idx, max_forward = 0, -np.inf
-        for i, rvec_cand in enumerate(rvecs):
-            R_cand, _ = cv2.Rodrigues(rvec_cand)
-            forward_score = -R_cand[:, 2][2]  # Z pointing towards camera
-            if forward_score < max_forward:
-                max_forward = forward_score
-                best_idx = i
-
-        # rvec/tvec transform SMF -> CF
-        R_cf_smf, _ = cv2.Rodrigues(rvecs[best_idx])
-        t_cf_smf = tvecs[best_idx].reshape(3, 1)
-
-        Tcf_smf = np.eye(4)
-        Tcf_smf[:3, :3] = R_cf_smf
-        Tcf_smf[:3, 3] = t_cf_smf.flatten()
-
-        # Get angle around Y axis
-        angle_x = np.degrees(rvecs[best_idx][0][0])
-        # Transformation MF -> SMF (known)
+        Returns:
+            tuple: (corrected_rvec, corrected_tvec) in the Camera Frame (CF).
+        """
         Tmf_smf_dict = { 
             5: np.array([[9.99999940e-01, 1.26880515e-08, 0.00000000e+00, 0.00000000e+00],
                         [1.26880515e-08, 9.99999940e-01, 0.00000000e+00, 0.00000000e+00],
@@ -331,32 +293,109 @@ class Estimator:
                         [ 0.18298708,  0.18298773,  0.96593541,  4.26524973],
                         [ 0.,          0.,          0.,          1.]])
         }
-        # Get Tmf_smf for this id
-        # Adjust id to int
-        id = int(id)
+        
+        # 1. Get the known transformation: T_mf_smf (Marker Frame -> System/Reference Frame)
+        Tmf_smf = Tmf_smf_dict.get(marker_id)
+        if Tmf_smf is None:
+            raise ValueError(f"Tmf_smf not found for marker ID: {marker_id}")
 
-        # Debug: print id
-        # print(f"Estimating pose for marker ID: {id}")
-        Tmf_smf = Tmf_smf_dict[id]
+        # 2. Convert rvec/tvec (CF -> SMF) to Homogeneous Matrix (T_cf_smf)
+        # R_cf_smf / t_cf_smf is the estimated pose of the SMF in the CF
+        R_cf_smf, _ = cv2.Rodrigues(rvec_smf)
+        t_cf_smf = tvec_smf.reshape(3, 1)
+
+        Tcf_smf = np.eye(4, dtype=np.float64) # Use float64 for matrix multiplication stability
+        Tcf_smf[:3, :3] = R_cf_smf
+        Tcf_smf[:3, 3] = t_cf_smf.flatten()
+
+        # 3. Calculate the Final Transformation: T_cf_mf (Camera Frame -> Marker Frame)
+        # T_cf_mf = T_cf_smf @ T_smf_mf, where T_smf_mf = inv(T_mf_smf)
+        # This gives the pose of the Marker Frame (MF) in the Camera Frame (CF).
         Tcf_mf = Tcf_smf @ np.linalg.inv(Tmf_smf)
-        # Extract corrected rvec/tvec
+        
+        # 4. Extract the corrected rvec/tvec
         R_cf_mf = Tcf_mf[:3, :3]
         corrected_tvec = Tcf_mf[:3, 3].reshape(3, 1)
         corrected_rvec, _ = cv2.Rodrigues(R_cf_mf)
-
-        #Print debug info. Poses before and after correction
-        # print(f"Before correction: rvec: {rvecs[best_idx].flatten()}, tvec: {tvecs[best_idx].flatten()}")
-        # print(f"After correction: rvec: {corrected_rvec.flatten()}, tvec: {corrected_tvec.flatten()}")
-
+        
         return corrected_rvec, corrected_tvec
+    
+    def estimate_pose_single(self, corners, id, marker_size):
+        """Estimate pose for a single marker detection using IPPE_SQUARE, 
+        followed by pose correction and selection of the physically valid solution.
+        """
+        # print(f"Estimating pose single for marker ID {id} with size {marker_size} mm.")
+        # 1. Define 3D object points for the marker corners in marker frame (MF)
+        obj_points = np.array([
+            [-marker_size/2,  marker_size/2, 0],
+            [ marker_size/2,  marker_size/2, 0],
+            [ marker_size/2, -marker_size/2, 0],
+            [-marker_size/2, -marker_size/2, 0]
+        ], dtype=np.float32)
 
+        # Ensure ID is integer
+        id_val = int(id)
+        
+        # 2. Solve PnP using IPPE_SQUARE method (returns 2 solutions)
+        # Note: IPPE_SQUARE uses Camera Matrix and Dist Coeffs from the class instance
+        try:
+            _, rvecs_raw, tvecs_raw, _ = cv2.solvePnPGeneric(
+                obj_points, 
+                np.array(corners, dtype=np.float32).reshape(1, 4, 2), 
+                np.eye(3, dtype=np.float32),
+                np.zeros((1, 5), dtype=np.float32),
+                flags=cv2.SOLVEPNP_IPPE_SQUARE
+            )
+        except cv2.error as e:
+            # Handle case where PnP fails (e.g., marker partially obscured)
+            print(f"[ERROR PnP] solvePnPGeneric failed for ID {id_val}: {e}")
+            return None, None
+        
+        if len(rvecs_raw) < 1:
+            return None, None
+
+        # 3. Transform and collect candidate poses
+        candidate_poses = []
+        for i in range(len(rvecs_raw)):
+            rvec_raw = rvecs_raw[i]
+            tvec_raw = tvecs_raw[i]
+
+            # Call the new dedicated function to apply transformations
+            corrected_rvec, corrected_tvec = self._transform_and_correct_pose(
+                rvec_raw, 
+                tvec_raw, 
+                id_val
+            )
+            
+            # Store the final transformed pose
+            candidate_poses.append({
+                'rvec': corrected_rvec,
+                'tvec': corrected_tvec,
+                # Note: Tcf_mf is not needed for the final return, but could be stored here
+            })
+
+        # 4. Select the physically valid solution (Ambiguity resolution)
+        best_pose = None
+        
+        # Selection heuristic: Choose the pose where the marker is 'in front' of the camera.
+        # This usually means the Z-coordinate (depth) of the marker in the CF is positive.
+        for pose in candidate_poses:
+            tvec = pose['tvec'].flatten()
+            if tvec[2] > 0: # Check if Z-coordinate is positive (in front of camera)
+                best_pose = pose
+                break
+        
+        # 5. Final Return
+        if best_pose is None:
+            # If no solution passes the Z > 0 test (e.g., camera is very close, or flip is not 180), 
+            # return the first solution or handle the error.
+            print(f"[WARNING] No pose passed Z>0 test for ID {id_val}. Returning first solution.")
+            best_pose = candidate_poses[0]
+        
+        # print(f"[INFO] Selected pose for marker ID {id_val}: rvec={best_pose['rvec'].flatten()}, tvec={best_pose['tvec'].flatten()}")
+        return best_pose['rvec'], best_pose['tvec']
 
     def estimate_pose_multi_iterative(self, corners_list, ids_list, marker_type):
-
-        # Define marker size (mm)
-        marker_size_dict = {"1p": 8.2, "2e": 5.3, "3e": 4.35, "2v": 4.2, "3v": 4.2}
-        marker_size = marker_size_dict.get(marker_type)
-
         match marker_type:
             case "2e":
                 marker_points_dict = {
@@ -444,18 +483,22 @@ class Estimator:
         rvecs_initial = []
         tvecs_initial = []
         used_ids = [] 
-
+        # print(f"[INFO] Estimating multi-marker pose for {len(ids_list)} markers of type {marker_type}.")
+        # Get initial poses using self.estimate_pose_multi_mean
+        rvecs_initial, tvecs_initial, used_ids_mean = self.estimate_pose_multi_mean(corners_list, ids_list, marker_type)
+        if rvecs_initial is None or tvecs_initial is None:
+            print("[AVISO] estimate_pose_multi_mean não retornou poses iniciais (None). Pulando multi-iterative.")
+            return [], [], []
+        try:
+            print(f"[INFO] Initial poses obtained for {len(rvecs_initial)} markers.")
+        except Exception:
+            print("[DEBUG] Falha ao imprimir tamanho de rvecs_initial; conteúdo inesperado.")
+        if len(rvecs_initial) == 0:
+            print("[AVISO] Nenhum marcador válido encontrado neste frame para estimativa multi.")
+            return [], [], used_ids
         # To all ided markers, collect their corners and corresponding 3D points
         for corners, id in zip(corners_list, ids_list):
             id = int(id)
-            # Get initial pose estimate for each marker using estimate_pose_single_raw
-            try:
-                # Do this for each id, 8 corners
-                rvec_init, tvec_init = self.estimate_pose_single(corners, id, marker_size)
-                rvecs_initial.append(rvec_init)
-                tvecs_initial.append(tvec_init)
-            except Exception:
-                pass
             if id in marker_points_dict:
                 obj_pts = marker_points_dict[id]
                 img_pts = np.array(corners, dtype=np.float32).reshape(4, 2)
@@ -465,8 +508,12 @@ class Estimator:
                 used_ids.append(id)
 
         # Create a SINGLE initial estimate using estimate pose single mean
-        rvec_init = np.mean(np.array(rvecs_initial), axis=0)
-        tvec_init = np.mean(np.array(tvecs_initial), axis=0)
+        try:
+            rvec_init = np.mean(np.array(rvecs_initial), axis=0)
+            tvec_init = np.mean(np.array(tvecs_initial), axis=0)
+        except Exception as e:
+            print(f"[ERRO] Falha ao computar média das poses iniciais: {e}")
+            return [], [], []
 
         # Check we have points
         if not all_obj_pts or not all_img_pts:
@@ -503,169 +550,177 @@ class Estimator:
             rvec=rvec_multi if use_guess else None, 
             tvec=tvec_multi if use_guess else None,
             useExtrinsicGuess=use_guess, 
-            flags=cv2.SOLVEPNP_ITERATIVE # Tenta o Iterative para aproveitar o guess, ou usa para otimização
+            flags=cv2.SOLVEPNP_SQPNP # Tenta o Iterative para aproveitar o guess, ou usa para otimização
         )
         
         if not retval:
-            print("[ERRO] solvePnP_Iterative falhou.")
+            print("[ERRO] solvePnP falhou.")
             return [], [], used_ids
-
-        # NOVO BLOCO DE PREPARAÇÃO PARA REFINAMENTO ---
-        # Garante que os vetores de pose estejam no formato e tipo de dados corretos.
-        # O solvePnP pode retornar (3, 1) ou (3,) dependendo da versão/flag. 
-        # solvePnPRefineLM prefere (3, 1) e np.float64 para otimização.
         
-        rvec_refined = rvec_multi.copy().reshape(3, 1).astype(np.float64)
-        tvec_refined = tvec_multi.copy().reshape(3, 1).astype(np.float64)
-        # 3. Refinamento Levenberg-Marquardt (LM)
-        try:
-            rvec_multi, tvec_multi = cv2.solvePnPRefineLM(
-                all_obj_pts, 
-                all_img_pts, 
-                np.eye(3, dtype=np.float32),
-                np.zeros((1, 5), dtype=np.float32),
-                rvec_refined, 
-                tvec_refined, 
-            )
-        except Exception as e:
-            print(f"[AVISO] solvePnPRefineLM falhou. Usando resultado do Iterative. Erro: {e}")
-
+        print(f"[INFO] Multi-marker pose estimated successfully.")
+        print(f"[INFO] Multi-marker pose estimated with {len(used_ids)} markers.")
         return rvec_multi, tvec_multi, used_ids
     
     def estimate_pose_multi(self, corners_list, ids_list, marker_type):
+        """
+        Estimates the multi-marker pose by selecting the IPPE solution combination 
+        where the marker rays (Tvec -> Rvec axis) do not intersect.
+        """
 
         # Define marker size (mm)
         marker_size_dict = {"1p": 8.2, "2e": 5.3, "3e": 4.35, "2v": 4.2, "3v": 4.2}
         marker_size = marker_size_dict.get(marker_type)
-
-        match marker_type:
-            case "2e":
-                marker_points_dict = {
-                    1: np.array([  # first marker
-                        [-2.65, 7.976, 3.721],
-                        [2.65, 7.976, 3.721],
-                        [2.65, 2.857, 5.092],
-                        [-2.65, 2.857, 5.092]
-                    ], dtype=np.float32),
-
-                    0: np.array([  # second marker
-                        [-2.65, -2.857, 5.092],
-                        [2.65, -2.857, 5.092],
-                        [2.65, -7.976, 3.721],
-                        [-2.65, -7.976, 3.721]
-                    ], dtype=np.float32)
-                }
-            
-            case "3e":
-                marker_points_dict = {
-                    2: np.array([
-                        [4.623, 2.165, 4.619],
-                        [8.806, 2.165, 3.498],
-                        [8.806, -2.165, 3.498],
-                        [4.623, -2.165, 4.619]
-                    ], dtype=np.float32),
-                    3: np.array([
-                        [-6.264, 6.54, 3.501],
-                        [-2.515, 8.705, 3.501],
-                        [-0.423, 5.083, 4.622],
-                        [-4.173, 2.918, 4.622]
-                    ], dtype=np.float32),
-                    4: np.array([
-                        [-4.187, -2.922, 4.619],
-                        [-0.437, -5.087, 4.619],
-                        [-2.528, -8.709, 3.498],
-                        [-6.278, -6.544, 3.498]
-                    ], dtype=np.float32)
-                }
-            
-            case "2v":
-                marker_points_dict = {
-                    6: np.array([
-                        [ -2.973, 5.935, 4.268],
-                        [ 0.00, 8.807, 3.498],
-                        [ 2.973, 5.935, 4.268],
-                        [ 0.00, 3.063, 5.037]
-                    ], dtype=np.float32),
-                    7: np.array([
-                        [-2.973, -5.935, 4.268],
-                        [0.00, -3.063, 5.037],
-                        [2.973, -5.935, 4.268],
-                        [0.00, -8.807, 3.498]
-                    ], dtype=np.float32)
-                }
-            
-            case "3v":
-                marker_points_dict = {
-                    9: np.array([
-                        [-4.403, 7.627, 3.498],
-                        [-0.392, 6.626, 4.268],
-                        [-1.531, 2.652, 5.037],
-                        [-5.542, 3.653, 4.268]
-                    ], dtype=np.float32),
-                    10: np.array([
-                        [ -5.539, -3.666, 4.265],
-                        [-1.528, -2.665, 5.035],
-                        [-0.389, -6.639, 4.265],
-                        [-4.40, -7.64, 3.496]
-                    ], dtype=np.float32),
-                    8: np.array([
-                        [3.063, 0.00, 5.037],
-                        [5.935, 2.973, 4.268],
-                        [8.807, 0.00, 3.498],
-                        [5.935, -2.973, 4.268]
-                    ], dtype=np.float32)
-                }
-
-            case _:
-                raise ValueError("Unknown marker type")
-        """Estimate pose for multiple marker detections."""
-
-        all_obj_pts = []
-        all_img_pts = []
-        rvecs_initial = []
-        tvecs_initial = []
+        
+        rvecs_initial = [] # Will store lists of [sol1_rvec, sol2_rvec]
+        tvecs_initial = [] # Will store lists of [sol1_tvec, sol2_tvec]
         used_ids = [] 
 
         # To all ided markers, collect their corners and corresponding 3D points
         for corners, id in zip(corners_list, ids_list):
             id = int(id)
-            # Get initial pose estimate for each marker using estimate_pose_single_raw
+            # Get initial pose estimate for each marker using estimate_pose_single
             try:
-                # Do this for each id, 8 corners
-                rvec_init, tvec_init = self.estimate_pose_single(corners, id, marker_size)
-                rvecs_initial.append(rvec_init)
-                tvecs_initial.append(tvec_init)
+                rvec_init, tvec_init = self.estimate_pose_single_raw(corners, marker_size)
+                # transform and correct both solutions
+                corrected_rvec_0, corrected_tvec_0 = self._transform_and_correct_pose(rvec_init[0], tvec_init[0], id)
+                corrected_rvec_1, corrected_tvec_1 = self._transform_and_correct_pose(rvec_init[1], tvec_init[1], id)
+                rvecs_initial.append([corrected_rvec_0, corrected_rvec_1])
+                tvecs_initial.append([corrected_tvec_0, corrected_tvec_1])
+                used_ids.append(id)
             except Exception:
                 pass
-            if id in marker_points_dict:
-                obj_pts = marker_points_dict[id]
-                img_pts = np.array(corners, dtype=np.float32).reshape(4, 2)
-
-                all_obj_pts.append(obj_pts)
-                all_img_pts.append(img_pts)
-                used_ids.append(id)
-
-        # Create a SINGLE initial estimate using estimate pose single mean
-        rvec_init = np.mean(np.array(rvecs_initial), axis=0)
-        tvec_init = np.mean(np.array(tvecs_initial), axis=0)
-
-        # Check we have points
-        if not all_obj_pts or not all_img_pts:
+        # Now we have multiple markers, each with 2 possible poses from IPPE
+        n_markers = len(rvecs_initial)
+        if n_markers == 0:
             print("[AVISO] Nenhum marcador válido encontrado neste frame para estimativa multi.")
             return [], [], used_ids
-
-        # Stack all points
-        all_obj_pts = np.vstack(all_obj_pts).astype(np.float32)
-        all_img_pts = np.vstack(all_img_pts).astype(np.float32)
+        # Generate all combinations of solutions (2^n_markers)
+        solution_combinations = list(product([0, 1], repeat=n_markers))
+        # ------------ OLD SELECTION METHOD BASED ON INTERATIVE -------------
+        # Get the best combination base on rvec (most similar to estimate_pose_multi_iterative result)
+        best_combination = None
+        min_rvec_diff = float('inf')
+        # First, get the iterative solution for comparison
+        rvec_iter, tvec_iter, _ = self.estimate_pose_multi_iterative(corners_list, ids_list, marker_type)
+        if rvec_iter is None:
+            print("[AVISO] estimate_pose_multi_iterative falhou. Retornando vazio.")
+            return [], [], used_ids
+        for combination in solution_combinations:
+            rvecs_selected = []
+            tvecs_selected = []
+            for marker_idx, sol_idx in enumerate(combination):
+                rvecs_selected.append(rvecs_initial[marker_idx][sol_idx])
+                tvecs_selected.append(tvecs_initial[marker_idx][sol_idx])
+            # Average the selected rvecs for comparison
+            rvecs_array = np.array(rvecs_selected)
+            rvec_mean = np.mean(rvecs_array, axis=0)
+            rvec_diff = np.linalg.norm(rvec_mean - rvec_iter)
+            # print(f"Combination {combination} has rvec diff: {rvec_diff:.6f}")
+            if rvec_diff < min_rvec_diff:
+                min_rvec_diff = rvec_diff
+                best_combination = combination
+        # print(f"Best combination: {best_combination} with rvec diff: {min_rvec_diff:.6f}")
+        # With the best combination, tranform the poses to CF
+        rvecs_final = []
+        tvecs_final = []
+        for marker_idx, sol_idx in enumerate(best_combination):
+            id = used_ids[marker_idx]
+            rvec_raw = rvecs_initial[marker_idx][sol_idx]
+            tvec_raw = tvecs_initial[marker_idx][sol_idx]
+            rvecs_final.append(rvec_raw)
+            tvecs_final.append(tvec_raw)
         
+        # Average the final poses
+        rvec_final = np.mean(np.array(rvecs_final), axis=0)
+        tvec_final = np.mean(np.array(tvecs_final), axis=0)
+        # Return the final averaged pose and used IDs
+
+        # ------------ NEW SELECTION METHOD BASED ON MIN CONSISTENCY ERROR -------------
+        # Get the best combination base on min consistency error
+        # best_error = float('inf')
+        # best_combination = None
+        # for combination in solution_combinations:
+        #     rvecs_selected = []
+        #     tvecs_selected = []
+        #     for marker_idx, sol_idx in enumerate(combination):
+        #         rvecs_selected.append(rvecs_initial[marker_idx][sol_idx])
+        #         tvecs_selected.append(tvecs_initial[marker_idx][sol_idx])
+        #     # Compute mean pose
+        #     rvecs_array = np.array(rvecs_selected)
+        #     tvecs_array = np.array(tvecs_selected)
+        #     rvec_mean = np.mean(rvecs_array, axis=0)
+        #     tvec_mean = np.mean(tvecs_array, axis=0)
+        #     # Compute consistency error (sum of squared distances from mean)
+        #     rvec_errors = np.linalg.norm(rvecs_array - rvec_mean, axis=1)
+        #     tvec_errors = np.linalg.norm(tvecs_array - tvec_mean, axis=1)
+        #     total_error = np.sum(rvec_errors**2) + np.sum(tvec_errors**2)
+        #     if total_error < best_error:
+        #         best_error = total_error
+        #         best_combination = combination
+        # # Select the best combination
+        # rvecs_final = []
+        # tvecs_final = []
+        # for marker_idx, sol_idx in enumerate(best_combination):
+        #     rvecs_final.append(rvecs_initial[marker_idx][sol_idx])
+        #     tvecs_final.append(tvecs_initial[marker_idx][sol_idx])
+        # # Average the final poses
+        # rvec_final = np.mean(np.array(rvecs_final), axis=0)
+        # tvec_final = np.mean(np.array(tvecs_final), axis=0)
+        
+        return rvec_final, tvec_final, used_ids
     
-        return rvec_init, tvec_init, used_ids
+    def estimate_pose_multi_mean(self, corners_list, ids_list, marker_type):
+        """Estimate pose for multiple marker detections using mean of single estimates."""
+
+        rvecs = []
+        tvecs = []
+        used_ids = []
+        # print(f"Estimating multi-marker pose for {len(corners_list)} markers.")
+
+        marker_size_dict = {"1p": 8.2, "2e": 5.3, "3e": 4.35, "2v": 4.2, "3v": 4.2}
+        marker_size = marker_size_dict.get(marker_type)
+        for corners, id in zip(corners_list, ids_list):
+            # print(f"Processing marker ID {id} for multi-marker pose estimation.")
+            # print(f"corners: {corners}, id: {id}, marker_type: {marker_size}")
+            try:
+                rvec, tvec = self.estimate_pose_single(corners, id, marker_size)
+                # print(f"Marker ID {id}: rvec = {rvec.flatten()}, tvec = {tvec.flatten()}")
+                if rvec is not None and tvec is not None:
+                    rvecs.append(rvec)
+                    tvecs.append(tvec)
+                    used_ids.append(id)
+            except Exception:
+                print(f"[ERRO] Falha ao estimar pose para marcador ID {id} na estimativa multi.")
+                pass
+
+        if len(rvecs) == 0 or len(tvecs) == 0:
+            return None, None, used_ids
+
+        # Compute mean pose
+        rvec_mean = np.mean(np.array(rvecs), axis=0)
+        tvec_mean = np.mean(np.array(tvecs), axis=0)
+
+        # print(f"[INFO] Multi-marker mean pose: rvec = {rvec_mean.flatten()}, tvec = {tvec_mean.flatten()}")
+        return rvec_mean, tvec_mean, used_ids
     
 if __name__ == "__main__":
     # Example usage
 
     cam_params_file = "camera_params.npz"
-    estimator = Estimator(cam_params_file)
-    csv_file = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_2e_2e_2.csv"
-    poses = estimator.get_poses(csv_file)
-    estimator.save_computed_poses(poses, csv_file)
+    estimation_type = "single" # Options: "single", "multi_mean", "multi_iterative", "multi"
+    marker_type = "3e"  # Options: "1p", "2e", "3e", "2v", "3v"
+    estimator = Estimator(cam_params_file, estimation_type=estimation_type)
+    
+    # Processar automaticamente _1, _2 e _3
+    for i in [1, 2, 3]:
+        csv_file = f"C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_{marker_type}_{marker_type}_{i}.csv"
+        print(f"\n{'='*60}")
+        print(f"Processando {marker_type}_{marker_type}_{i}...")
+        print(f"{'='*60}")
+        poses = estimator.get_poses(csv_file)
+        estimator.save_computed_poses(poses, csv_file)
+        print(f"✓ {marker_type}_{marker_type}_{i} concluído")
+    
+    print(f"\n{'='*60}")
+    print(f"✅ Todos os arquivos foram processados com sucesso!")
+    print(f"{'='*60}")
