@@ -4,6 +4,7 @@ import numpy as np
 from re import match
 import pandas as pd
 import os
+from pathlib import Path
 
 
 def imread_with_fallback(path):
@@ -264,8 +265,16 @@ class CornerFinder:
         
 # Main function to run the corner finder
 if __name__ == "__main__":
-    # For each folder inside this folder
-    main_folder = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d100"  # Replace with your image folder path
+    repo_root = Path(os.environ.get("BEPE_ROOT", Path(__file__).resolve().parents[1]))
+    default_data_root = repo_root.parent / "markers" / "data" / "d100"
+    main_folder = Path(os.environ.get("BEPE_DATA_ROOT", str(default_data_root)))
+
+    if not main_folder.exists():
+        raise FileNotFoundError(
+            f"Data root not found: '{main_folder}'. "
+            "Set BEPE_DATA_ROOT to your dataset root."
+        )
+
     # Get all subfolders, but skip the 'results' folder to avoid re-processing outputs
     subfolders = [f.path for f in os.scandir(main_folder) if f.is_dir() and os.path.basename(f.path) != 'results']
     for image_folder in subfolders:

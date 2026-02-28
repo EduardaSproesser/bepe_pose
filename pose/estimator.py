@@ -6,6 +6,7 @@ import pandas as pd
 import os
 import matplotlib.pyplot as plt
 from itertools import product
+from pathlib import Path
 
 class Estimator:
     def __init__(self, cam_params_file, estimation_type, dict_type=cv2.aruco.DICT_4X4_50):
@@ -704,21 +705,29 @@ class Estimator:
         return rvec_mean, tvec_mean, used_ids
     
 if __name__ == "__main__":
-    # Example usage
+    repo_root = Path(os.environ.get("BEPE_ROOT", Path(__file__).resolve().parents[1]))
+    default_results_root = repo_root.parent / "markers" / "data" / "d100" / "results"
+    results_root = Path(os.environ.get("BEPE_RESULTS_ROOT", str(default_results_root)))
 
-    cam_params_file = "camera_params.npz"
+    cam_params_file = os.environ.get(
+        "BEPE_CAMERA_PARAMS_FILE",
+        str(Path(__file__).resolve().parent / "camera_params.npz")
+    )
     estimation_type = "multi_mean" # Options: "single", "multi_mean", "multi_iterative", "multi"
     marker_type = "2e"  # Options: "1p", "2e", "3e", "2v", "3v"
     estimator = Estimator(cam_params_file, estimation_type=estimation_type)
     
     # Processar automaticamente _1, _2 e _3
     for i in [1, 2, 3]:
-        csv_file = f"C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d100\\results\\corners_{marker_type}_{marker_type}_{i}.csv"
+        csv_file = results_root / f"corners_{marker_type}_{marker_type}_{i}.csv"
+        if not csv_file.exists():
+            print(f"[WARN] File not found, skipping: {csv_file}")
+            continue
         print(f"\n{'='*60}")
         print(f"Processando {marker_type}_{marker_type}_{i}...")
         print(f"{'='*60}")
-        poses = estimator.get_poses(csv_file)
-        estimator.save_computed_poses(poses, csv_file)
+        poses = estimator.get_poses(str(csv_file))
+        estimator.save_computed_poses(poses, str(csv_file))
         print(f"✓ {marker_type}_{marker_type}_{i} concluído")
     
     print(f"\n{'='*60}")

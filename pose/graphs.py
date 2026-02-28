@@ -4,6 +4,7 @@ import pandas as pd
 import os
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+from pathlib import Path
 
 class DrawGraphs:
     def __init__(self, csv_file, estimation_type="single", marker_type="2e_2e", save_folder="results"):
@@ -1182,8 +1183,10 @@ def generate_complete_error_table(base_path, marker_types, estimation_types, out
 
 if __name__ == "__main__":
     # ========== CONFIGURAÇÃO ==========
-    base_path = r"C:\Users\eduar\OneDrive\Área de Trabalho\bepe\codes\markers\data\d100\results"
-    results_folder = "results"
+    repo_root = Path(os.environ.get("BEPE_ROOT", Path(__file__).resolve().parents[1]))
+    default_results_root = repo_root.parent / "markers" / "data" / "d100" / "results"
+    base_path = Path(os.environ.get("BEPE_RESULTS_ROOT", str(default_results_root)))
+    results_folder = os.environ.get("BEPE_OUTPUT_RESULTS_DIR", "results")
     
     # Todas as combinações
     marker_types = ["1p", "2e", "3e", "2v", "3v"]
@@ -1204,12 +1207,12 @@ if __name__ == "__main__":
             
             try:
                 # Construir caminhos dos arquivos CSV
-                csv_file1 = os.path.join(base_path, f"corners_{marker_type}_{marker_type}_1_with_poses_{estimation_type}.csv")
-                csv_file2 = os.path.join(base_path, f"corners_{marker_type}_{marker_type}_2_with_poses_{estimation_type}.csv")
-                csv_file3 = os.path.join(base_path, f"corners_{marker_type}_{marker_type}_3_with_poses_{estimation_type}.csv")
+                csv_file1 = base_path / f"corners_{marker_type}_{marker_type}_1_with_poses_{estimation_type}.csv"
+                csv_file2 = base_path / f"corners_{marker_type}_{marker_type}_2_with_poses_{estimation_type}.csv"
+                csv_file3 = base_path / f"corners_{marker_type}_{marker_type}_3_with_poses_{estimation_type}.csv"
                 
                 # Verificar se os arquivos existem
-                if not all(os.path.exists(f) for f in [csv_file1, csv_file2, csv_file3]):
+                if not all(f.exists() for f in [csv_file1, csv_file2, csv_file3]):
                     print(f"⚠️  Arquivos não encontrados, pulando...")
                     total_skipped += 1
                     continue
@@ -1294,7 +1297,7 @@ if __name__ == "__main__":
     
     try:
         error_table = generate_complete_error_table(
-            base_path=base_path,
+            base_path=str(base_path),
             marker_types=marker_types,
             estimation_types=estimation_types,
             output_file="complete_error_table.csv"
