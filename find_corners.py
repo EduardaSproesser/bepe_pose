@@ -265,7 +265,7 @@ class CornerFinder:
 # Main function to run the corner finder
 if __name__ == "__main__":
     # For each folder inside this folder
-    main_folder = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50"  # Replace with your image folder path
+    main_folder = "C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d100"  # Replace with your image folder path
     # Get all subfolders, but skip the 'results' folder to avoid re-processing outputs
     subfolders = [f.path for f in os.scandir(main_folder) if f.is_dir() and os.path.basename(f.path) != 'results']
     for image_folder in subfolders:

@@ -405,10 +405,20 @@ class DrawGraphs:
             else:
                 mean_errors.append(np.nan)
 
+        # Filtrar bins vazias (sem dados)
+        valid_indices = [i for i in range(len(mean_errors)) if not np.isnan(mean_errors[i])]
+        if len(valid_indices) == 0:
+            plt.close()
+            return
+        
+        filtered_bin_centers = [bin_centers[i] for i in valid_indices]
+        filtered_mean_errors = [mean_errors[i] for i in valid_indices]
+        bin_width = (bins[1] - bins[0]) * 0.9
+
         fig, ax = plt.subplots()
-        ax.bar(bin_centers, mean_errors, width=(self.distance_bins[1] - self.distance_bins[0]) * 0.9, color='steelblue', edgecolor='black')
-        ax.set_xlabel('Distance to Origin (units)')
-        ax.set_ylabel('Mean Translation Error (units)')
+        ax.bar(filtered_bin_centers, filtered_mean_errors, width=bin_width, color='steelblue', edgecolor='black')
+        ax.set_xlabel('Distance to Origin (mm)')
+        ax.set_ylabel('Mean Translation Error (mm)')
         ax.set_title('Translation Error vs Distance')
         ax.grid(axis='y', linestyle='--', alpha=0.7)
         filename = os.path.join(self.save_folder, f"translation_errors_distance_bins_{self.estimation_type}_{self.marker_type}.png")
@@ -461,9 +471,20 @@ class DrawGraphs:
                 mean_errors.append(np.mean([e for _, e in in_bin]))
             else:
                 mean_errors.append(np.nan)
+        
+        # Filtrar bins vazias (sem dados)
+        valid_indices = [i for i in range(len(mean_errors)) if not np.isnan(mean_errors[i])]
+        if len(valid_indices) == 0:
+            plt.close()
+            return
+        
+        filtered_bin_centers = [bin_centers[i] for i in valid_indices]
+        filtered_mean_errors = [mean_errors[i] for i in valid_indices]
+        bin_width = (bins[1] - bins[0]) * 0.9
+        
         fig, ax = plt.subplots()
-        ax.bar(bin_centers, mean_errors, width=(self.distance_bins[1] - self.distance_bins[0]) * 0.9, color='coral', edgecolor='black')
-        ax.set_xlabel('Distance to Origin (units)')
+        ax.bar(filtered_bin_centers, filtered_mean_errors, width=bin_width, color='coral', edgecolor='black')
+        ax.set_xlabel('Distance to Origin (mm)')
         ax.set_ylabel('Mean Rotation Error (degrees)')
         ax.set_title('Rotation Error vs Distance')
         ax.grid(axis='y', linestyle='--', alpha=0.7)
@@ -495,9 +516,25 @@ class DrawGraphs:
 
         detection_rates = np.divide(valid_counts, total_counts, out=np.zeros_like(valid_counts), where=total_counts != 0)
 
+        # Imprimir contagem de incidências por bin
+        print(f"\n  Incidências por bin de distância ({self.marker_type} - {self.estimation_type}):")
+        for i in range(len(bins) - 1):
+            if total_counts[i] > 0:
+                print(f"    [{bins[i]:>3.0f}-{bins[i+1]:>3.0f}mm): {int(valid_counts[i]):>3}/{int(total_counts[i]):>3} detecções ({detection_rates[i]*100:>5.1f}%)")
+
+        # Filtrar bins vazias (sem dados)
+        valid_indices = [i for i in range(len(total_counts)) if total_counts[i] > 0]
+        if len(valid_indices) == 0:
+            plt.close()
+            return
+        
+        filtered_bin_centers = [bin_centers[i] for i in valid_indices]
+        filtered_detection_rates = [detection_rates[i] for i in valid_indices]
+        bin_width = (bins[1] - bins[0]) * 0.9
+
         fig, ax = plt.subplots()
-        ax.bar(bin_centers, detection_rates, width=(self.distance_bins[1] - self.distance_bins[0]) * 0.9, color='mediumseagreen', edgecolor='black')
-        ax.set_xlabel('Distance to Origin (units)')
+        ax.bar(filtered_bin_centers, filtered_detection_rates, width=bin_width, color='mediumseagreen', edgecolor='black')
+        ax.set_xlabel('Distance to Origin (mm)')
         ax.set_ylabel('Detection Rate')
         ax.set_title('Detection Rate vs Distance')
         ax.set_ylim(0, 1.05)
@@ -590,10 +627,19 @@ class DrawGraphs:
 
         print(f"Total Entries: {total_entries}")
         print(f"Valid Detections: {valid_detections}")
-        print(f"Translation Error - Mean: {np.mean(translation_errors):.4f}, Std: {np.std(translation_errors):.4f}")
-        print(f"Translation Error - Median: {np.median(translation_errors):.4f}, 90th Percentile: {np.percentile(translation_errors, 90):.4f}")
-        print(f"Rotation Error (deg) - Mean: {np.mean(np.degrees(rotation_errors)):.4f}, Std: {np.std(np.degrees(rotation_errors)):.4f}")
-        print(f"Rotation Error (deg) - Median: {np.median(np.degrees(rotation_errors)):.4f}, 90th Percentile: {np.percentile(np.degrees(rotation_errors), 90):.4f}")
+        
+        # Verificar se há dados suficientes para calcular estatísticas
+        if len(translation_errors) > 0:
+            print(f"Translation Error - Mean: {np.mean(translation_errors):.4f}, Std: {np.std(translation_errors):.4f}")
+            print(f"Translation Error - Median: {np.median(translation_errors):.4f}, 90th Percentile: {np.percentile(translation_errors, 90):.4f}")
+        else:
+            print("Translation Error - No valid data available")
+        
+        if len(rotation_errors) > 0:
+            print(f"Rotation Error (deg) - Mean: {np.mean(np.degrees(rotation_errors)):.4f}, Std: {np.std(np.degrees(rotation_errors)):.4f}")
+            print(f"Rotation Error (deg) - Median: {np.median(np.degrees(rotation_errors)):.4f}, 90th Percentile: {np.percentile(np.degrees(rotation_errors), 90):.4f}")
+        else:
+            print("Rotation Error - No valid data available")
         # ... (Restante da impressão de resultados) ...
     
     def plot_rvec_comparison(self, index):
@@ -668,10 +714,20 @@ class DrawGraphs:
             else:
                 mean_errors.append(np.nan)
 
+        # Filtrar bins vazias (sem dados)
+        valid_indices = [i for i in range(len(mean_errors)) if not np.isnan(mean_errors[i])]
+        if len(valid_indices) == 0:
+            plt.close()
+            return
+        
+        filtered_bin_centers = [bin_centers[i] for i in valid_indices]
+        filtered_mean_errors = [mean_errors[i] for i in valid_indices]
+        bin_width = (bins[1] - bins[0]) * 0.9
+
         fig, ax = plt.subplots()
-        ax.bar(bin_centers, mean_errors, width=(self.distance_bins[1] - self.distance_bins[0]) * 0.9, color='orchid', edgecolor='black')
-        ax.set_xlabel('Distance to Origin (units)')
-        ax.set_ylabel('Mean XY Translation Error (units)')
+        ax.bar(filtered_bin_centers, filtered_mean_errors, width=bin_width, color='orchid', edgecolor='black')
+        ax.set_xlabel('Distance to Origin (mm)')
+        ax.set_ylabel('Mean XY Translation Error (mm)')
         ax.set_title('XY Translation Error vs Distance')
         ax.grid(axis='y', linestyle='--', alpha=0.7)
         filename = os.path.join(self.save_folder, f"xy_translation_mean_error_bins_{self.estimation_type}_{self.marker_type}.png")
@@ -706,10 +762,20 @@ class DrawGraphs:
             else:
                 mean_errors.append(np.nan)
 
+        # Filtrar bins vazias (sem dados)
+        valid_indices = [i for i in range(len(mean_errors)) if not np.isnan(mean_errors[i])]
+        if len(valid_indices) == 0:
+            plt.close()
+            return
+        
+        filtered_bin_centers = [bin_centers[i] for i in valid_indices]
+        filtered_mean_errors = [mean_errors[i] for i in valid_indices]
+        bin_width = (bins[1] - bins[0]) * 0.9
+
         fig, ax = plt.subplots()
-        ax.bar(bin_centers, mean_errors, width=(self.distance_bins[1] - self.distance_bins[0]) * 0.9, color='cyan', edgecolor='black')
-        ax.set_xlabel('Distance to Origin (units)')
-        ax.set_ylabel('Mean Z Translation Error (units)')
+        ax.bar(filtered_bin_centers, filtered_mean_errors, width=bin_width, color='cyan', edgecolor='black')
+        ax.set_xlabel('Distance to Origin (mm)')
+        ax.set_ylabel('Mean Z Translation Error (mm)')
         ax.set_title('Z Translation Error vs Distance')
         ax.grid(axis='y', linestyle='--', alpha=0.7)
         filename = os.path.join(self.save_folder, f"z_translation_mean_error_bins_{self.estimation_type}_{self.marker_type}.png")
@@ -1116,7 +1182,7 @@ def generate_complete_error_table(base_path, marker_types, estimation_types, out
 
 if __name__ == "__main__":
     # ========== CONFIGURAÇÃO ==========
-    base_path = r"C:\Users\eduar\OneDrive\Área de Trabalho\bepe\codes\markers\data\d50\results"
+    base_path = r"C:\Users\eduar\OneDrive\Área de Trabalho\bepe\codes\markers\data\d100\results"
     results_folder = "results"
     
     # Todas as combinações
@@ -1220,3 +1286,29 @@ if __name__ == "__main__":
     print(f"  • Total: {total_processed + total_skipped}")
     print(f"📁 Todos os resultados estão em: {results_folder}/")
     print(f"="*80)
+    
+    # ========== GERAR TABELA COMPLETA DE ERROS ==========
+    print(f"\n" + "="*80)
+    print(f"GERANDO TABELA COMPLETA DE ERROS")
+    print(f"="*80)
+    
+    try:
+        error_table = generate_complete_error_table(
+            base_path=base_path,
+            marker_types=marker_types,
+            estimation_types=estimation_types,
+            output_file="complete_error_table.csv"
+        )
+        
+        if error_table is not None and len(error_table) > 0:
+            print(f"\n✅ Tabela de erros gerada com sucesso!")
+            print(f"   Arquivo: complete_error_table.csv")
+            print(f"   Total de linhas: {len(error_table)}")
+            print(f"\nPrimeiras linhas da tabela:")
+            print(error_table.head(10))
+        else:
+            print(f"\n⚠️ Tabela gerada mas vazia")
+    except Exception as e:
+        print(f"\n❌ Erro ao gerar tabela de erros: {e}")
+        import traceback
+        traceback.print_exc()

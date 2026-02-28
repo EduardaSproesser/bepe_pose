@@ -127,7 +127,7 @@ class Estimator:
             # print(f"Estimating pose for image with {nv} valid markers.")
             if nv == 1:
                 # Try to estimate single marker pose if corners/ids available
-                if len(c) > 0 and len(i) > 0 and i[0]==3:
+                if len(c) > 0 and len(i) > 0:
                     try:
                     # rvec, tvec = self.estimate_pose_single_raw(c[0], marker_size)
                         # print(f"[INFO] Estimating single-marker pose for ID {i[0]}.")
@@ -707,13 +707,13 @@ if __name__ == "__main__":
     # Example usage
 
     cam_params_file = "camera_params.npz"
-    estimation_type = "single" # Options: "single", "multi_mean", "multi_iterative", "multi"
-    marker_type = "3e"  # Options: "1p", "2e", "3e", "2v", "3v"
+    estimation_type = "multi_mean" # Options: "single", "multi_mean", "multi_iterative", "multi"
+    marker_type = "2e"  # Options: "1p", "2e", "3e", "2v", "3v"
     estimator = Estimator(cam_params_file, estimation_type=estimation_type)
     
     # Processar automaticamente _1, _2 e _3
     for i in [1, 2, 3]:
-        csv_file = f"C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d50\\results\\corners_{marker_type}_{marker_type}_{i}.csv"
+        csv_file = f"C:\\Users\\eduar\\OneDrive\\Área de Trabalho\\bepe\\codes\\markers\\data\\d100\\results\\corners_{marker_type}_{marker_type}_{i}.csv"
         print(f"\n{'='*60}")
         print(f"Processando {marker_type}_{marker_type}_{i}...")
         print(f"{'='*60}")
