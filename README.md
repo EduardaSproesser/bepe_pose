@@ -17,6 +17,7 @@ Keywords: Drones, Instrumentation, Sensors, Control Bench, Computer Vision.
 ## Research Team
 
 - Candidate: Eduarda Rodrigues Sproesser
+- PhD Student Mentor: Ilya Semenov
 - Supervising Professor: André Carmona Hernandes
 - Co-supervising Professor: Marcelo Becker
 - Scholarship Supervisor Abroad: Stefano Mintchev
